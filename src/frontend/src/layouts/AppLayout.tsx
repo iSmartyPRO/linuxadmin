@@ -22,6 +22,7 @@ import { Link, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../api/auth'
 import { useAccess } from '../api/access'
 import { useAppSettings, type ModuleKey } from '../api/settings'
+import { BrandLogo } from '../components/BrandLogo'
 
 const { Header, Sider, Content } = Layout
 
@@ -177,7 +178,9 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
             gap: 12,
           }}
         >
-          <div className="la-brand-mark">LA</div>
+          <div className="la-brand-mark" aria-hidden>
+            <BrandLogo size={36} />
+          </div>
           <div style={{ overflow: 'hidden' }}>
             <div className="display" style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>
               {appName}

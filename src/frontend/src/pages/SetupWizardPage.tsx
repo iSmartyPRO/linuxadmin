@@ -2,6 +2,7 @@ import { Alert, Button, Form, Input, InputNumber, Steps, Typography, message } f
 import { useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { BrandLogo } from '../components/BrandLogo'
 
 const SETUP_TOKEN_KEY = 'lnxadmin_setup_token'
 
@@ -170,9 +171,12 @@ export function SetupWizardPage() {
         className="la-panel"
         style={{ width: '100%', maxWidth: 560, padding: 28 }}
       >
-        <Typography.Title level={3} className="display" style={{ marginTop: 0 }}>
-          Initial setup
-        </Typography.Title>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+          <BrandLogo size={40} />
+          <Typography.Title level={3} className="display" style={{ margin: 0 }}>
+            Initial setup
+          </Typography.Title>
+        </div>
         <Typography.Paragraph type="secondary">
           Configure the minimum required to start: PostgreSQL connection and an admin account.
           Everything else can be changed later in Settings.

@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '../api/auth'
+import { BrandLogo } from '../components/BrandLogo'
 
 export function LoginPage() {
   const { login, token, loading } = useAuth()
@@ -62,8 +63,8 @@ export function LoginPage() {
           style={{ position: 'relative' }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 40 }}>
-            <div className="la-brand-mark" style={{ width: 48, height: 48, fontSize: 18, borderRadius: 16 }}>
-              LA
+            <div className="la-brand-mark" style={{ width: 56, height: 56, borderRadius: 16 }} aria-hidden>
+              <BrandLogo size={56} />
             </div>
             <div>
               <div className="display" style={{ fontSize: 22, fontWeight: 800 }}>

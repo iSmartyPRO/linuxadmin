@@ -165,18 +165,28 @@ a {
   }
 }
 
+.la-brand-logo {
+  display: block;
+  object-fit: contain;
+  flex-shrink: 0;
+  user-select: none;
+}
+
 .la-brand-mark {
   width: 36px;
   height: 36px;
   border-radius: 12px;
   display: grid;
   place-items: center;
-  background: linear-gradient(145deg, var(--la-accent-soft), var(--la-accent-deep));
-  color: white;
-  font-family: var(--la-display);
-  font-weight: 800;
-  font-size: 14px;
-  box-shadow: 0 10px 28px var(--la-glow);
+  overflow: hidden;
+  background: transparent;
+  box-shadow: none;
+}
+
+.la-brand-mark .la-brand-logo,
+.la-brand-mark img {
+  width: 100%;
+  height: 100%;
 }
 
 .la-sider .ant-layout-sider-children {
