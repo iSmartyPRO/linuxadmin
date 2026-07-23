@@ -24,6 +24,7 @@ import {
   SettingOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { useAccess } from '../api/access'
 import { useAppSettings } from '../api/settings'
 import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
@@ -46,6 +47,7 @@ type Jail = {
 }
 
 export function Fail2banPage() {
+  const { canMutate } = useAccess()
   const { moduleOpts } = useAppSettings()
   const opts = moduleOpts('fail2ban')
   const [data, setData] = useState<any>(null)
@@ -68,7 +70,7 @@ export function Fail2banPage() {
     load()
   }, [load])
 
-  const canMut = !!data?.allow_mutations
+  const canMut = !!data?.allow_mutations && canMutate('fail2ban')
   const help = data?.param_help || {}
 
   const run = async (body: Record<string, unknown>, okMsg: string) => {
@@ -132,6 +134,7 @@ export function Fail2banPage() {
   return (
     <div className="la-page">
       <PageHeader
+        docsKey="fail2ban"
         title="Fail2ban"
         subtitle={`${data.version || 'version unknown'} · ${data.jails_count} jail(s)`}
         extra={

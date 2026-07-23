@@ -148,6 +148,7 @@ export function DisksPage() {
   return (
     <div className="la-page">
       <PageHeader
+        docsKey="disks"
         title="Disks"
         subtitle={
           data.partitions?.length

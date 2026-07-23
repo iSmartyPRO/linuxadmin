@@ -8,10 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_current_user
+from app.core.principal import Principal, require_module
 from app.core.db import get_db
 from app.models import MetricSnapshot, PgMetricSnapshot, SshConnectionEvent, SshTunnelSnapshot
 
-router = APIRouter(prefix="/api/history", tags=["history"])
+router = APIRouter(prefix="/api/history", tags=["history"], dependencies=[Depends(require_module("history", "read"))])
 
 
 @router.get("/metrics")

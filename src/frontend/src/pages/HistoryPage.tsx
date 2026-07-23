@@ -579,6 +579,7 @@ export function HistoryPage() {
   return (
     <div className="la-page">
       <PageHeader
+        docsKey="history"
         title="History"
         subtitle="System metrics and SSH Tunnel connection log for the selected period."
         extra={

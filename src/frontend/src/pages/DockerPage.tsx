@@ -127,6 +127,7 @@ export function DockerPage() {
     return (
       <div className="la-page">
         <PageHeader
+          docsKey="docker"
           title="Docker"
           subtitle={data.version ? `client ${data.version}` : data.binary || undefined}
         />

@@ -4,6 +4,7 @@ import enUS from 'antd/locale/en_US'
 import { useEffect, useMemo, useState } from 'react'
 import { AuthProvider, useAuth } from './api/auth'
 import { AppSettingsProvider } from './api/settings'
+import { AccessProvider } from './api/access'
 import { AppLayout } from './layouts/AppLayout'
 import { LoginPage } from './pages/LoginPage'
 import { SetupWizardPage } from './pages/SetupWizardPage'
@@ -20,6 +21,7 @@ import { OpenVpnPage } from './pages/OpenVpnPage'
 import { UsersPage } from './pages/UsersPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { PostgresPage } from './pages/PostgresPage'
+import { ModuleSettingsDetailPage } from './pages/ModuleSettingsDetailPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ModuleGate } from './components/ModuleGate'
 import { buildAntdTheme } from './theme/tokens'
@@ -47,7 +49,11 @@ function Protected({ children }: { children: React.ReactNode }) {
   }
   if (!configured) return <Navigate to="/setup" replace />
   if (!token) return <Navigate to="/login" replace />
-  return <AppSettingsProvider>{children}</AppSettingsProvider>
+  return (
+    <AppSettingsProvider>
+      <AccessProvider>{children}</AccessProvider>
+    </AppSettingsProvider>
+  )
 }
 
 function Shell() {
@@ -206,6 +212,7 @@ function Shell() {
               }
             />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="settings/modules/:moduleKey" element={<ModuleSettingsDetailPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

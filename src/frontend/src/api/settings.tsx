@@ -24,6 +24,7 @@ export type ModuleKey =
   | 'ssh_tunnel'
   | 'wireguard'
   | 'openvpn'
+  | 'settings'
 
 export type ModulesConfig = Record<string, Record<string, any>>
 

@@ -1,13 +1,17 @@
 import type { ReactNode } from 'react'
+import { Space } from 'antd'
+import { ModuleDocsButton } from './ModuleDocsButton'
 
 type Props = {
   title: ReactNode
   subtitle?: ReactNode
   extra?: ReactNode
   live?: boolean
+  /** Module doc key for the in-app documentation drawer */
+  docsKey?: string
 }
 
-export function PageHeader({ title, subtitle, extra, live }: Props) {
+export function PageHeader({ title, subtitle, extra, live, docsKey }: Props) {
   return (
     <div
       style={{
@@ -58,7 +62,10 @@ export function PageHeader({ title, subtitle, extra, live }: Props) {
           </p>
         ) : null}
       </div>
-      {extra}
+      <Space wrap>
+        {docsKey ? <ModuleDocsButton docKey={docsKey} /> : null}
+        {extra}
+      </Space>
     </div>
   )
 }

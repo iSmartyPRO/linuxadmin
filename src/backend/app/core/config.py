@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     # When true (default in production), OpenAPI /docs and /redoc are disabled
     disable_docs: bool | None = Field(default=None, alias="LNXADMIN_DISABLE_DOCS")
 
+    # Optional one-time token required for first-run setup API (header X-Setup-Token)
+    setup_token: str = Field(default="", alias="LNXADMIN_SETUP_TOKEN")
+
+    # Trust X-Forwarded-For / X-Real-IP for rate-limit keys (only behind a trusted reverse proxy)
+    trust_proxy: bool = Field(default=False, alias="LNXADMIN_TRUST_PROXY")
+
     @field_validator("app_env", mode="before")
     @classmethod
     def _normalize_env(cls, v: object) -> str:

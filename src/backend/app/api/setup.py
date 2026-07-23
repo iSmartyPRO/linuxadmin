@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 import logging
+import secrets
 from typing import Any, Optional
 
 import asyncpg
@@ -8,9 +10,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.core.auth import get_current_user, hash_password
+from app.core.auth import hash_password
+from app.core.principal import Principal, require_module
 from app.core.config import get_settings
 from app.core.db import AsyncSessionLocal, configure_engine, init_db
+from app.core.rate_limit import client_ip, setup_limiter
 from app.core.setup_state import (
     apply_bootstrap,
     generate_jwt_secret,
@@ -25,6 +29,55 @@ logger = logging.getLogger("lnxadmin.setup")
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
 PASSWORD_MASK = "********"
+
+
+def _is_loopback(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host in {"localhost", "::1", "127.0.0.1"}
+
+
+def assert_setup_access(request: Request) -> None:
+    """Restrict unauthenticated setup mutations.
+
+    - Always rate-limited by client IP
+    - If LNXADMIN_SETUP_TOKEN is set → require matching X-Setup-Token header
+    - Else in production → only loopback clients
+    """
+    if is_setup_complete():
+        raise HTTPException(status_code=400, detail="Setup already completed — use Settings")
+
+    cfg = get_settings()
+    ip = client_ip(request, trust_proxy=cfg.trust_proxy)
+    key = f"setup:{ip}"
+    setup_limiter.check(key)
+
+    expected = (cfg.setup_token or "").strip()
+    provided = (request.headers.get("x-setup-token") or "").strip()
+    if expected:
+        if not provided or not secrets.compare_digest(provided, expected):
+            setup_limiter.hit(key)
+            raise HTTPException(
+                status_code=403,
+                detail="Setup token required (header X-Setup-Token)",
+            )
+        return
+
+    if cfg.is_production:
+        peer = request.client.host if request.client else ""
+        if not _is_loopback(peer or ""):
+            setup_limiter.hit(key)
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Setup from non-localhost is blocked in production. "
+                    "SSH-tunnel to 127.0.0.1 or set LNXADMIN_SETUP_TOKEN"
+                ),
+            )
+
+    # Throttle successful wizard probes as well (DB test / complete)
+    setup_limiter.hit(key)
 
 
 class DbParams(BaseModel):
@@ -78,16 +131,35 @@ async def _test_asyncpg(params: DbParams) -> dict[str, Any]:
 
 async def _upsert_admin(username: str, password: str) -> None:
     from app.core.db import AsyncSessionLocal as SessionLocal
+    from app.models import Role
 
     assert SessionLocal is not None
     async with SessionLocal() as session:
+        role_id = None
+        role = (
+            await session.execute(select(Role).where(Role.slug == "superadmin"))
+        ).scalar_one_or_none()
+        if role:
+            role_id = role.id
         result = await session.execute(select(User).where(User.username == username))
         user = result.scalar_one_or_none()
         if user is None:
-            session.add(User(username=username, password_hash=hash_password(password), is_active=True))
+            session.add(
+                User(
+                    username=username,
+                    password_hash=hash_password(password),
+                    display_name=username,
+                    is_active=True,
+                    is_superadmin=True,
+                    role_id=role_id,
+                )
+            )
         else:
             user.password_hash = hash_password(password)
             user.is_active = True
+            user.is_superadmin = True
+            if role_id:
+                user.role_id = role_id
         await session.commit()
 
 
@@ -99,6 +171,8 @@ async def setup_status():
         "env": cfg.app_env,
         "bind_host": cfg.bind_host,
         "bind_port": cfg.bind_port,
+        "setup_token_required": bool((cfg.setup_token or "").strip()),
+        "localhost_only": cfg.is_production and not bool((cfg.setup_token or "").strip()),
         "suggested": {
             "db_host": cfg.db_host or "localhost",
             "db_port": cfg.db_port or 5432,
@@ -110,17 +184,14 @@ async def setup_status():
 
 
 @router.post("/test-db")
-async def setup_test_db(body: DbParams):
-    if is_setup_complete():
-        # Still allow authenticated testing via settings; here only for wizard
-        raise HTTPException(status_code=400, detail="Setup already completed — use Settings to test DB")
+async def setup_test_db(body: DbParams, request: Request):
+    assert_setup_access(request)
     return await _test_asyncpg(body)
 
 
 @router.post("/complete")
 async def setup_complete(body: SetupCompleteBody, request: Request):
-    if is_setup_complete():
-        raise HTTPException(status_code=400, detail="Setup already completed")
+    assert_setup_access(request)
 
     if body.admin_password in {"admin", "password", "changeme", "change-me"}:
         raise HTTPException(status_code=400, detail="Choose a stronger admin password")
@@ -180,12 +251,15 @@ async def setup_complete(body: SetupCompleteBody, request: Request):
 
 
 @router.get("/connection")
-async def get_connection(_: str = Depends(get_current_user)):
+async def get_connection(_: Principal = Depends(require_module("settings_connection", "read"))):
     return public_connection_view()
 
 
 @router.post("/test-connection")
-async def test_connection(body: DbParams, _: str = Depends(get_current_user)):
+async def test_connection(
+    body: DbParams,
+    _: Principal = Depends(require_module("settings_connection", "read")),
+):
     cfg = get_settings()
     password = body.password
     if not password or password == PASSWORD_MASK:
@@ -202,7 +276,11 @@ async def test_connection(body: DbParams, _: str = Depends(get_current_user)):
 
 
 @router.put("/connection")
-async def update_connection(body: ConnectionUpdate, request: Request, _: str = Depends(get_current_user)):
+async def update_connection(
+    body: ConnectionUpdate,
+    request: Request,
+    _: Principal = Depends(require_module("settings_connection", "full")),
+):
     """Update bootstrap DB / admin settings (persisted to .env). May reconnect live."""
     if not is_setup_complete():
         raise HTTPException(status_code=503, detail="Initial setup required")

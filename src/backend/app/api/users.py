@@ -9,10 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors import users as users_collector
 from app.core.auth import get_current_user
+from app.core.principal import Principal, require_module
 from app.core.db import get_db
 from app.services.persistence import get_modules
 
-router = APIRouter(prefix="/api/users", tags=["users"])
+router = APIRouter(prefix="/api/users", tags=["users"], dependencies=[Depends(require_module("users", "read"))])
 
 
 class CreateUserBody(BaseModel):
@@ -120,6 +121,7 @@ async def create_group(
     body: CreateGroupBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("users", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -131,6 +133,7 @@ async def delete_group(
     name: str,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("users", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -147,6 +150,7 @@ async def add_member(
     body: GroupMemberBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("users", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -159,6 +163,7 @@ async def remove_member(
     username: str,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("users", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -170,6 +175,7 @@ async def create_user(
     body: CreateUserBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("users", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -203,6 +209,7 @@ async def delete_user(
     remove_home: bool = False,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("users", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -220,6 +227,7 @@ async def lock_user(
     body: LockBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("users", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -237,6 +245,7 @@ async def change_shell(
     body: ShellBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("users", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -254,6 +263,7 @@ async def set_groups(
     body: GroupsBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("users", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -271,6 +281,7 @@ async def set_password(
     body: PasswordBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("users", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)

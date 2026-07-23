@@ -19,7 +19,7 @@ from app.models import (
     SshTunnelSnapshot,
     User,
 )
-from app.core.auth import hash_password, verify_password
+from app.core.auth import hash_password
 
 
 DEFAULT_PG_SETTINGS = {
@@ -189,8 +189,20 @@ async def get_modules(session: AsyncSession) -> dict[str, Any]:
 
 
 async def ensure_admin_user(session: AsyncSession) -> None:
-    """Create admin from .env on first boot; keep password in sync with .env when set."""
+    """Create admin from .env on first boot only (as Super Admin).
+
+    Existing DB password hashes are never overwritten from `.env` on restart
+    (change password via Settings → Connection, which updates both DB and `.env`).
+    """
+    from app.models import Role
+
     settings = get_settings()
+    role_id = None
+    role_row = await session.execute(select(Role).where(Role.slug == "superadmin"))
+    role = role_row.scalar_one_or_none()
+    if role:
+        role_id = role.id
+
     result = await session.execute(select(User).where(User.username == settings.admin_user))
     user = result.scalar_one_or_none()
     if user is None:
@@ -198,15 +210,33 @@ async def ensure_admin_user(session: AsyncSession) -> None:
             User(
                 username=settings.admin_user,
                 password_hash=hash_password(settings.admin_password),
+                display_name=settings.admin_user,
                 is_active=True,
+                is_superadmin=True,
+                role_id=role_id,
             )
         )
         await session.commit()
         return
-    # Sync password hash from bootstrap .env (Settings → Connection also updates this)
-    if settings.admin_password and not verify_password(settings.admin_password, user.password_hash):
-        user.password_hash = hash_password(settings.admin_password)
-        user.is_active = True
+
+    # Ensure bootstrap admin keeps Super Admin flags if role table exists
+    changed = False
+    if role_id and user.role_id is None:
+        user.role_id = role_id
+        changed = True
+    if not user.is_superadmin and role_id and user.role_id == role_id:
+        # only auto-promote the configured bootstrap username when it already has superadmin role
+        pass
+    if not user.is_superadmin and user.username == settings.admin_user and role_id:
+        # First bootstrap account: keep elevated if somehow demoted without other superadmins
+        others = await session.execute(
+            select(User).where(User.is_superadmin.is_(True), User.id != user.id)
+        )
+        if others.scalars().first() is None:
+            user.is_superadmin = True
+            user.role_id = role_id
+            changed = True
+    if changed:
         await session.commit()
 
 

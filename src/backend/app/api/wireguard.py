@@ -8,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors import wireguard as wg
 from app.core.auth import get_current_user
+from app.core.principal import Principal, require_module
 from app.core.db import get_db
 from app.services.persistence import get_modules
 
-router = APIRouter(prefix="/api/wireguard", tags=["wireguard"])
+router = APIRouter(prefix="/api/wireguard", tags=["wireguard"], dependencies=[Depends(require_module("wireguard", "read"))])
 
 
 class ServerBody(BaseModel):
@@ -87,7 +88,11 @@ async def overview(db: AsyncSession = Depends(get_db), _: str = Depends(get_curr
 
 
 @router.post("/install")
-async def install(db: AsyncSession = Depends(get_db), _: str = Depends(get_current_user)):
+async def install(
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("wireguard", "full")),
+):
     mod = await _mod(db)
     _require_mutations(mod)
     return await wg.install_tools(mod)
@@ -98,6 +103,7 @@ async def upsert_server(
     body: ServerBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("wireguard", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -105,14 +111,22 @@ async def upsert_server(
 
 
 @router.post("/server/apply")
-async def apply_server(db: AsyncSession = Depends(get_db), _: str = Depends(get_current_user)):
+async def apply_server(
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("wireguard", "full")),
+):
     mod = await _mod(db)
     _require_mutations(mod)
     return await wg.apply_server(mod)
 
 
 @router.post("/server/stop")
-async def stop_server(db: AsyncSession = Depends(get_db), _: str = Depends(get_current_user)):
+async def stop_server(
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("wireguard", "full")),
+):
     mod = await _mod(db)
     _require_mutations(mod)
     return await wg.stop_server(mod)
@@ -123,6 +137,7 @@ async def create_peer(
     body: PeerCreateBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("wireguard", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -135,6 +150,7 @@ async def update_peer(
     body: PeerUpdateBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("wireguard", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -146,6 +162,7 @@ async def delete_peer(
     peer_id: str,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("wireguard", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)

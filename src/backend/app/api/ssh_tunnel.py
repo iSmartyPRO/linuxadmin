@@ -9,10 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors import ssh_tunnel as tun
 from app.core.auth import get_current_user
+from app.core.principal import Principal, require_module
 from app.core.db import get_db
 from app.services.persistence import get_modules
 
-router = APIRouter(prefix="/api/ssh-tunnel", tags=["ssh-tunnel"])
+router = APIRouter(prefix="/api/ssh-tunnel", tags=["ssh-tunnel"], dependencies=[Depends(require_module("ssh_tunnel", "read"))])
 
 
 class Destination(BaseModel):
@@ -118,6 +119,7 @@ async def ensure_infra(
     body: EnsureBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("ssh_tunnel", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -142,6 +144,7 @@ async def create_user(
     body: CreateUserBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("ssh_tunnel", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -158,6 +161,7 @@ async def delete_user(
     username: str,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("ssh_tunnel", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -170,6 +174,7 @@ async def set_destinations(
     body: DestinationsBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("ssh_tunnel", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -186,6 +191,7 @@ async def add_key(
     body: AddKeyBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("ssh_tunnel", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -200,6 +206,7 @@ async def generate_key(
     body: GenerateKeyBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("ssh_tunnel", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -218,6 +225,7 @@ async def delete_key(
     fingerprint: str = Query(..., min_length=8),
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("ssh_tunnel", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -244,6 +252,7 @@ async def ssh_config_post(
     body: SshConfigBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("ssh_tunnel", "full")),
 ):
     mod = await _mod(db)
     _require_enabled(mod)

@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons'
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../api/auth'
+import { useAccess } from '../api/access'
 import { useAppSettings, type ModuleKey } from '../api/settings'
 
 const { Header, Sider, Content } = Layout
@@ -121,25 +122,34 @@ const MENU: Array<{
     label: 'PostgreSQL',
     to: '/postgres',
   },
-  { key: '/settings', icon: <SettingOutlined />, label: 'Settings', to: '/settings' },
+  { key: '/settings', module: 'settings', icon: <SettingOutlined />, label: 'Settings', to: '/settings' },
 ]
 
 export function AppLayout({ dark, onToggleTheme }: Props) {
   const { username, logout } = useAuth()
   const { loading, appName, isModuleEnabled } = useAppSettings()
+  const { loading: accessLoading, can, profile } = useAccess()
   const location = useLocation()
   const selected = '/' + (location.pathname.split('/')[1] || '')
 
-  const items = MENU.filter((item) => !item.module || isModuleEnabled(item.module)).map((item) => ({
+  const items = MENU.filter((item) => {
+    if (item.key === '/settings') {
+      return can('settings', 'read') || can('settings_access', 'read') || can('settings_connection', 'read') || can('settings_modules', 'read')
+    }
+    if (!item.module) return true
+    return isModuleEnabled(item.module) && can(item.module, 'read')
+  }).map((item) => ({
     key: item.key,
     icon: item.icon,
     label: <Link to={item.to}>{item.label}</Link>,
   }))
 
-  // If current route's module is disabled, bounce to settings
+  // If current route's module is disabled / forbidden, bounce home
   const current = MENU.find((m) => m.key === (selected === '/' ? '/' : selected))
-  if (!loading && current?.module && !isModuleEnabled(current.module)) {
-    return <Navigate to="/settings" replace />
+  if (!loading && !accessLoading && current?.module && current.key !== '/settings') {
+    if (!isModuleEnabled(current.module) || !can(current.module, 'read')) {
+      return <Navigate to="/" replace />
+    }
   }
 
   return (
@@ -176,7 +186,7 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
           </div>
         </div>
 
-        {loading ? (
+        {loading || accessLoading ? (
           <div style={{ padding: 24, textAlign: 'center' }}>
             <Spin size="small" />
           </div>
@@ -189,9 +199,11 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
         )}
 
         <div style={{ padding: '12px 16px 20px', borderTop: '1px solid var(--la-panel-border)' }}>
-          <div style={{ fontSize: 11, color: 'var(--la-muted)', marginBottom: 4 }}>session</div>
+          <div style={{ fontSize: 11, color: 'var(--la-muted)', marginBottom: 4 }}>
+            {profile?.role?.name || (profile?.is_superadmin ? 'Super Admin' : 'session')}
+          </div>
           <Typography.Text ellipsis style={{ display: 'block', fontWeight: 600 }}>
-            {username}
+            {profile?.display_name || username}
           </Typography.Text>
         </div>
       </Sider>

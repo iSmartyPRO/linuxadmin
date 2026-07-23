@@ -8,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors import network as net_collector
 from app.core.auth import get_current_user
+from app.core.principal import Principal, require_module
 from app.core.db import get_db
 from app.services.persistence import get_modules
 
-router = APIRouter(prefix="/api/network", tags=["network"])
+router = APIRouter(prefix="/api/network", tags=["network"], dependencies=[Depends(require_module("network", "read"))])
 
 
 class IfaceBody(BaseModel):
@@ -94,6 +95,7 @@ async def network_iface(
     body: IfaceBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("network", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -105,6 +107,7 @@ async def network_kill(
     body: KillBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("network", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)

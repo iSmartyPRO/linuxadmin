@@ -8,10 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors import openvpn as ovpn
 from app.core.auth import get_current_user
+from app.core.principal import Principal, require_module
 from app.core.db import get_db
 from app.services.persistence import get_modules
 
-router = APIRouter(prefix="/api/openvpn", tags=["openvpn"])
+router = APIRouter(prefix="/api/openvpn", tags=["openvpn"], dependencies=[Depends(require_module("openvpn", "read"))])
 
 
 class ServerBody(BaseModel):
@@ -86,7 +87,11 @@ async def overview(db: AsyncSession = Depends(get_db), _: str = Depends(get_curr
 
 
 @router.post("/install")
-async def install(db: AsyncSession = Depends(get_db), _: str = Depends(get_current_user)):
+async def install(
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("openvpn", "full")),
+):
     mod = await _mod(db)
     _require_mutations(mod)
     return await ovpn.install_tools(mod)
@@ -97,6 +102,7 @@ async def upsert_server(
     body: ServerBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("openvpn", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -104,14 +110,22 @@ async def upsert_server(
 
 
 @router.post("/server/apply")
-async def apply_server(db: AsyncSession = Depends(get_db), _: str = Depends(get_current_user)):
+async def apply_server(
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("openvpn", "full")),
+):
     mod = await _mod(db)
     _require_mutations(mod)
     return await ovpn.apply_server(mod)
 
 
 @router.post("/server/stop")
-async def stop_server(db: AsyncSession = Depends(get_db), _: str = Depends(get_current_user)):
+async def stop_server(
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("openvpn", "full")),
+):
     mod = await _mod(db)
     _require_mutations(mod)
     return await ovpn.stop_server(mod)
@@ -122,6 +136,7 @@ async def create_client(
     body: ClientCreateBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("openvpn", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -134,6 +149,7 @@ async def update_client(
     body: ClientUpdateBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("openvpn", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)
@@ -145,6 +161,7 @@ async def delete_client(
     client_id: str,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("openvpn", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)

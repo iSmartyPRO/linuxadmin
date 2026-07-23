@@ -28,6 +28,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { useAccess } from '../api/access'
 import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
 import { tablePagination } from '../utils/tablePagination'
@@ -67,6 +68,7 @@ type Overview = {
 }
 
 export function UsersPage() {
+  const { canMutate } = useAccess()
   const [data, setData] = useState<Overview | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
@@ -87,6 +89,8 @@ export function UsersPage() {
   useEffect(() => {
     load()
   }, [load])
+
+  const canMut = !!data?.allow_mutations && canMutate('users')
 
   const users = useMemo(() => {
     const q = filter.trim().toLowerCase()
@@ -173,6 +177,7 @@ export function UsersPage() {
   return (
     <div className="la-page">
       <PageHeader
+        docsKey="users"
         title="Users & Groups"
         subtitle="Host system users and groups — view and manage"
         extra={
@@ -187,7 +192,7 @@ export function UsersPage() {
             <Button icon={<ReloadOutlined />} onClick={load}>
               Refresh
             </Button>
-            {data.allow_mutations ? (
+            {canMut ? (
               <>
                 <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateUserOpen(true)}>
                   User
@@ -201,7 +206,7 @@ export function UsersPage() {
         }
       />
 
-      {!data.allow_mutations ? (
+      {!canMut ? (
         <Alert
           type="info"
           showIcon
@@ -234,8 +239,8 @@ export function UsersPage() {
         </Col>
         <Col xs={12} md={6}>
           <Panel title="Mutations">
-            <Tag color={data.allow_mutations ? 'success' : 'warning'}>
-              {data.allow_mutations ? 'allowed' : 'denied'}
+            <Tag color={canMut ? 'success' : 'warning'}>
+              {canMut ? 'allowed' : 'denied'}
             </Tag>
           </Panel>
         </Col>
@@ -427,7 +432,7 @@ export function UsersPage() {
               </Descriptions.Item>
             </Descriptions>
 
-            {data.allow_mutations ? (
+            {canMut ? (
               <Space wrap>
                 <Button
                   icon={userDrawer.locked ? <UnlockOutlined /> : <LockOutlined />}
@@ -606,7 +611,7 @@ export function UsersPage() {
               ) : null}
             </Descriptions>
 
-            {data.allow_mutations ? (
+            {canMut ? (
               <Space wrap>
                 <Select
                   showSearch

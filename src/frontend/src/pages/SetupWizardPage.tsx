@@ -3,8 +3,12 @@ import { useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 
+const SETUP_TOKEN_KEY = 'lnxadmin_setup_token'
+
 type Status = {
   configured: boolean
+  setup_token_required?: boolean
+  localhost_only?: boolean
   suggested?: {
     db_host?: string
     db_port?: number
@@ -14,10 +18,34 @@ type Status = {
   }
 }
 
+function getSetupToken(): string {
+  try {
+    return sessionStorage.getItem(SETUP_TOKEN_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+function setSetupToken(token: string) {
+  try {
+    if (token) sessionStorage.setItem(SETUP_TOKEN_KEY, token)
+    else sessionStorage.removeItem(SETUP_TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
 async function setupFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(init?.headers as Record<string, string> | undefined),
+  }
+  const token = getSetupToken()
+  if (token) headers['X-Setup-Token'] = token
+
   const res = await fetch(path, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    headers,
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
@@ -39,6 +67,7 @@ export function SetupWizardPage() {
   const [step, setStep] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [setupToken, setSetupTokenState] = useState(getSetupToken())
   const [dbForm] = Form.useForm()
   const [adminForm] = Form.useForm()
 
@@ -65,10 +94,18 @@ export function SetupWizardPage() {
 
   if (status?.configured) return <Navigate to="/login" replace />
 
+  const persistToken = (value: string) => {
+    setSetupTokenState(value)
+    setSetupToken(value.trim())
+  }
+
   const testDb = async () => {
     setBusy(true)
     setError(null)
     try {
+      if (status?.setup_token_required && !getSetupToken()) {
+        throw new Error('Enter the setup token from LNXADMIN_SETUP_TOKEN')
+      }
       const values = await dbForm.validateFields()
       const res = await setupFetch<{ ok: boolean; error?: string; version?: string }>(
         '/api/setup/test-db',
@@ -88,6 +125,9 @@ export function SetupWizardPage() {
     setBusy(true)
     setError(null)
     try {
+      if (status?.setup_token_required && !getSetupToken()) {
+        throw new Error('Enter the setup token from LNXADMIN_SETUP_TOKEN')
+      }
       const db = await dbForm.validateFields()
       const admin = await adminForm.validateFields()
       if (admin.admin_password !== admin.admin_password2) {
@@ -103,6 +143,7 @@ export function SetupWizardPage() {
           app_env: 'production',
         }),
       })
+      setSetupToken('')
       message.success('Setup complete — sign in with your admin account')
       navigate('/login', { replace: true })
     } catch (e) {
@@ -146,12 +187,35 @@ export function SetupWizardPage() {
 
         {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} /> : null}
 
+        {status?.localhost_only ? (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="Production setup is limited to localhost"
+            description="Open the panel via SSH tunnel to 127.0.0.1, or set LNXADMIN_SETUP_TOKEN in .env to allow remote setup."
+          />
+        ) : null}
+
         {step === 0 ? (
           <div>
             <Typography.Paragraph>
               This wizard writes bootstrap values to <span className="mono">.env</span>, creates
               tables, and enables the panel. JWT secret is generated automatically.
             </Typography.Paragraph>
+            {status?.setup_token_required ? (
+              <div style={{ marginBottom: 16 }}>
+                <Typography.Text style={{ display: 'block', marginBottom: 8 }}>
+                  Setup token (<span className="mono">LNXADMIN_SETUP_TOKEN</span>)
+                </Typography.Text>
+                <Input.Password
+                  className="mono"
+                  value={setupToken}
+                  onChange={(e) => persistToken(e.target.value)}
+                  placeholder="Required for this host"
+                />
+              </div>
+            ) : null}
             <Button type="primary" onClick={() => setStep(1)}>
               Continue
             </Button>

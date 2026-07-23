@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api import auth, disks, docker, history, network, openvpn, postgres, security, services, setup, ssh_tunnel, system, users, wireguard
+from app.api import access, auth, disks, docker, history, network, openvpn, postgres, security, services, setup, ssh_tunnel, system, users, wireguard
 from app.api import settings as settings_api
 from app.core.config import get_settings
 from app.core.db import AsyncSessionLocal, configure_engine, init_db
@@ -150,6 +150,7 @@ def create_app() -> FastAPI:
     app.include_router(services.router)
     app.include_router(postgres.router)
     app.include_router(settings_api.router)
+    app.include_router(access.router)
 
     @app.get("/api/health")
     async def health():

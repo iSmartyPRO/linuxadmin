@@ -26,6 +26,7 @@ import {
   ApiOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { useAccess } from '../api/access'
 import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
 import { tablePagination } from '../utils/tablePagination'
@@ -93,6 +94,7 @@ type UserDetail = {
 }
 
 export function SshTunnelPage() {
+  const { canMutate } = useAccess()
   const [data, setData] = useState<Overview | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
@@ -192,7 +194,7 @@ export function SshTunnelPage() {
     return () => window.clearInterval(t)
   }, [load])
 
-  const canMut = !!data?.allow_mutations
+  const canMut = !!data?.allow_mutations && canMutate('ssh_tunnel')
 
   const users = useMemo(() => {
     const q = filter.trim().toLowerCase()
@@ -285,6 +287,7 @@ export function SshTunnelPage() {
   return (
     <div className="la-page">
       <PageHeader
+        docsKey="ssh_tunnel"
         title="SSH Tunnel"
         subtitle={`${data.count || 0} user(s) · ${data.active_sessions || 0} online · jump ${data.public_hostname}:${data.public_port} · group ${data.group}`}
         extra={

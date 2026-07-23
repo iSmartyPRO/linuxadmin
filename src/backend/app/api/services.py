@@ -6,10 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors import services as svc
 from app.core.auth import get_current_user
+from app.core.principal import Principal, require_module
 from app.core.db import get_db
 from app.services.persistence import get_modules
 
-router = APIRouter(prefix="/api/services", tags=["services"])
+router = APIRouter(prefix="/api/services", tags=["services"], dependencies=[Depends(require_module("services", "read"))])
 
 ALLOWED = {"start", "stop", "restart", "reload", "enable", "disable"}
 
@@ -77,6 +78,7 @@ async def service_action(
     body: ActionBody,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("services", "full")),
 ):
     mod = await _mod(db)
     _require_mutations(mod)

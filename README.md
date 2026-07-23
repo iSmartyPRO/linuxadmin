@@ -20,8 +20,10 @@ Web-based administration panel for a Linux host: live system metrics, historical
 | **SSH Tunnel** | Restricted `tun-*` users, keys, `permitopen` destinations, live sessions + history |
 | **WireGuard** | VPN server, peers, full/split/custom routes, client `.conf` download + QR codes |
 | **OpenVPN** | VPN server, clients, full/split/custom routes, `.ovpn` download (QR when small) |
+| **Access** | Panel users, RBAC roles (none/read/full per module), API keys for integrations |
+| **Docs** | In-app documentation on every module + API integration guide |
 
-Destructive actions are **off by default** (`allow_mutations` per module in Settings).
+Destructive actions are **off by default** (`allow_mutations` per module in Settings) and also require role permission **full**.
 
 ---
 
@@ -74,7 +76,7 @@ make stop / restart
 make systemd-install   # install/enable systemd unit (root)
 ```
 
-After first start you can always change the panel database, admin password, CORS, and modules in **Settings → Connection** / **Modules** (no need to re-run the wizard).
+After first start you can always change the panel database, admin password, and CORS in **Settings → Connection**, and enable modules / fine-tune them under **Settings → Modules** (card grid → detail page; PostgreSQL connection is inside the PostgreSQL card).
 
 ### Development (API + Vite)
 
@@ -102,7 +104,7 @@ UI: http://127.0.0.1:5173
 | `LNXADMIN_CORS_ORIGINS` | Allowed browser origins (comma-separated) |
 | `LNXADMIN_*_INTERVAL` / `RETENTION_DAYS` | Defaults until overridden in the UI |
 
-Module toggles, mutation flags, and fine-grained options live in PostgreSQL (`app_settings`) and are edited under **Settings** in the UI.
+Module toggles, mutation flags, and fine-grained options live in PostgreSQL (`app_settings`) and are edited under **Settings → Modules** in the UI (toggle on the card; open the card for detail options).
 
 ---
 
@@ -146,7 +148,8 @@ CI: `.gitlab-ci.yml` runs backend import check + frontend build on every pipelin
 
 Built-in:
 
-- JWT auth on API routes; WebSocket requires `?token=`
+- JWT auth on API routes; WebSocket auth via first message (token not in the URL)
+- Login rate-limit / lockout; setup wizard rate-limited and localhost-only in production (or `LNXADMIN_SETUP_TOKEN`)
 - Production mode **refuses to start** with default/weak JWT or admin password
 - OpenAPI `/docs` disabled in production by default
 - Security headers (CSP, `X-Frame-Options`, `nosniff`, …); HSTS only behind HTTPS
@@ -202,7 +205,7 @@ A superuser is **not** required. Create a role with `pg_monitor` and optionally 
 Step-by-step: [docs/postgres-monitoring.md](docs/postgres-monitoring.md)  
 Checklist (restarts / 1C): [docs/TODO-pg-stat-statements.md](docs/TODO-pg-stat-statements.md)
 
-Monitor credentials are stored in the Settings UI, not in git.
+Monitor credentials are stored under **Settings → Modules → PostgreSQL**, not in git.
 
 ---
 
@@ -228,8 +231,10 @@ lnxadmin/
 |--------|------|--------|
 | `POST` | `/api/auth/login` | JWT |
 | `GET` | `/api/health` | Liveness |
+| `GET` | `/api/access/me` | Current principal + permissions |
+| `GET` | `/api/access/...` | Users, roles, API keys (RBAC) |
 | `GET` | `/api/system/...` | Live metrics |
-| `WS` | `/ws/metrics?token=` | Live stream |
+| `WS` | `/ws/metrics` | Live stream (auth via first JSON message) |
 | `GET` | `/api/history/metrics` | System history |
 | `GET` | `/api/history/ssh-tunnel` | Tunnel session counts |
 | `GET` | `/api/history/ssh-tunnel/connections` | Connection log |

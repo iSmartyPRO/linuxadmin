@@ -7,10 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors import disks as disks_collector
 from app.core.auth import get_current_user
+from app.core.principal import Principal, require_module
 from app.core.db import get_db
 from app.services.persistence import get_modules
 
-router = APIRouter(prefix="/api/disks", tags=["disks"])
+router = APIRouter(prefix="/api/disks", tags=["disks"], dependencies=[Depends(require_module("disks", "read"))])
 
 
 async def _mod(db: AsyncSession) -> dict:

@@ -5,6 +5,7 @@ import json
 from typing import Any, Set
 
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 
 
 class MetricsHub:
@@ -13,12 +14,16 @@ class MetricsHub:
         self._lock = asyncio.Lock()
         self.latest: dict[str, Any] | None = None
 
-    async def connect(self, ws: WebSocket) -> None:
-        await ws.accept()
+    async def connect(self, ws: WebSocket, *, already_accepted: bool = False) -> None:
+        if not already_accepted and ws.client_state != WebSocketState.CONNECTED:
+            await ws.accept()
         async with self._lock:
             self._clients.add(ws)
         if self.latest:
-            await ws.send_text(json.dumps(self.latest, default=str))
+            try:
+                await ws.send_text(json.dumps(self.latest, default=str))
+            except Exception:
+                await self.disconnect(ws)
 
     async def disconnect(self, ws: WebSocket) -> None:
         async with self._lock:

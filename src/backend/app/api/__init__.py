@@ -1,4 +1,5 @@
 from app.api import (
+    access,
     auth,
     disks,
     docker,
@@ -17,6 +18,7 @@ from app.api import (
 )
 
 __all__ = [
+    "access",
     "auth",
     "disks",
     "docker",

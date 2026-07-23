@@ -15,6 +15,7 @@ import {
 } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { api } from '../api/client'
+import { useAccess } from '../api/access'
 import { useAppSettings } from '../api/settings'
 import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
@@ -66,6 +67,7 @@ function statusColor(status: string) {
 }
 
 export function NetworkPage() {
+  const { canMutate } = useAccess()
   const { moduleOpts } = useAppSettings()
   const opts = moduleOpts('network')
   const [data, setData] = useState<NetworkData | null>(null)
@@ -86,7 +88,7 @@ export function NetworkPage() {
     return () => clearInterval(t)
   }, [])
 
-  const canMut = !!(data?.allow_mutations ?? opts.allow_mutations)
+  const canMut = !!(data?.allow_mutations ?? opts.allow_mutations) && canMutate('network')
   const canKill = canMut && opts.allow_kill !== false
 
   const setIface = async (name: string, state: 'up' | 'down') => {
@@ -253,6 +255,7 @@ export function NetworkPage() {
   return (
     <div className="la-page">
       <PageHeader
+        docsKey="network"
         title="Network"
         subtitle="Listening ports, active connections, and the processes holding them"
         live

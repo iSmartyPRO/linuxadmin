@@ -10,9 +10,16 @@ from app.collectors import fail2ban as f2b
 from app.collectors import firewall as fw
 from app.core.auth import get_current_user
 from app.core.db import get_db
+from app.core.principal import Principal, get_principal, require_module
 from app.services.persistence import get_modules
 
 router = APIRouter(prefix="/api/security", tags=["security"])
+
+
+async def _require_any_security(principal: Principal = Depends(get_principal)) -> Principal:
+    if not (principal.can("fail2ban", "read") or principal.can("firewall", "read")):
+        raise HTTPException(status_code=403, detail="Missing permission: fail2ban|firewall:read")
+    return principal
 
 
 class Fail2banActionBody(BaseModel):
@@ -69,17 +76,17 @@ def _require_mutations(mod: dict, label: str) -> None:
 @router.get("/overview")
 async def security_overview(
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_user),
+    principal: Principal = Depends(_require_any_security),
 ):
     modules = await get_modules(db)
     fail2ban = (
         await f2b.collect_fail2ban_overview()
-        if modules.get("fail2ban", {}).get("enabled", True)
+        if principal.can("fail2ban", "read") and modules.get("fail2ban", {}).get("enabled", True)
         else {"installed": False, "active": False, "disabled": True, "jails_count": 0}
     )
     firewall = (
         await fw.collect_firewall_overview()
-        if modules.get("firewall", {}).get("enabled", True)
+        if principal.can("firewall", "read") and modules.get("firewall", {}).get("enabled", True)
         else {"backend": "none", "enabled": False, "disabled": True}
     )
     return {"fail2ban": fail2ban, "firewall": firewall}
@@ -88,7 +95,7 @@ async def security_overview(
 @router.get("/fail2ban")
 async def fail2ban_details(
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_user),
+    _: Principal = Depends(require_module("fail2ban", "read")),
 ):
     mod = await _mod(db, "fail2ban")
     if not mod.get("enabled", True):
@@ -107,7 +114,7 @@ async def fail2ban_details(
 async def fail2ban_action(
     body: Fail2banActionBody,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_user),
+    _: Principal = Depends(require_module("fail2ban", "full")),
 ):
     mod = await _mod(db, "fail2ban")
     _require_mutations(mod, "Fail2ban")
@@ -125,7 +132,7 @@ async def fail2ban_action(
 @router.get("/firewall")
 async def firewall_details(
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_user),
+    _: Principal = Depends(require_module("firewall", "read")),
 ):
     mod = await _mod(db, "firewall")
     if not mod.get("enabled", True):
@@ -144,7 +151,7 @@ async def firewall_details(
 async def firewall_action(
     body: FirewallActionBody,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_user),
+    _: Principal = Depends(require_module("firewall", "full")),
 ):
     mod = await _mod(db, "firewall")
     _require_mutations(mod, "Firewall")

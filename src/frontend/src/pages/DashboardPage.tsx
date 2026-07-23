@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Col, Progress, Row, Space, Table, Tag, Typography } from 'antd'
-import { api, wsUrl } from '../api/client'
+import { api, connectAuthedWs } from '../api/client'
 import { useAppSettings } from '../api/settings'
 import { GaugeCard } from '../components/GaugeCard'
 import { StatusCard } from '../components/StatusCard'
@@ -84,11 +84,12 @@ export function DashboardPage() {
 
     if (ov.live_metrics === false) return
 
-    const ws = new WebSocket(wsUrl('/ws/metrics'))
+    const ws = connectAuthedWs('/ws/metrics')
     wsRef.current = ws
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data)
+        if (msg.type === 'auth_ok') return
         if (msg.type === 'system' && msg.data) {
           const d = msg.data as SystemData
           setData(d)
@@ -132,6 +133,7 @@ export function DashboardPage() {
   return (
     <div className="la-page">
       <PageHeader
+        docsKey="overview"
         title={data?.host.hostname || 'Overview'}
         subtitle={loadLine}
         live={!!data && ov.live_metrics !== false}

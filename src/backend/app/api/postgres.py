@@ -8,11 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors import postgres as pg
 from app.core.auth import get_current_user
+from app.core.principal import Principal, require_module
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.services.persistence import DEFAULT_PG_SETTINGS, get_setting, set_setting
 
-router = APIRouter(prefix="/api/postgres", tags=["postgres"])
+router = APIRouter(prefix="/api/postgres", tags=["postgres"], dependencies=[Depends(require_module("postgres", "read"))])
 
 PASSWORD_MASK = "********"
 
@@ -96,6 +97,7 @@ async def postgres_test_connection(
     body: TestConnectionBody | None = None,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("postgres", "full")),
 ):
     ms = await _monitor_settings(db)
     probe = {**ms}
@@ -188,6 +190,7 @@ async def put_postgres_settings(
     body: PostgresSettingsUpdate,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("postgres", "full")),
 ):
     existing = await _monitor_settings(db)
     merged = _merge_password_on_update(body.model_dump(exclude_unset=True), existing)

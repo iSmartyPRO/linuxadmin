@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.core.principal import Principal, get_principal, require_module
 from app.services.persistence import (
     DEFAULT_APP_CONFIG,
     DEFAULT_MODULES,
@@ -103,7 +104,7 @@ async def _bundle(db: AsyncSession) -> dict[str, Any]:
 @router.get("")
 async def get_all_settings(
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_user),
+    _: Principal = Depends(require_module("settings", "read")),
 ):
     return await _bundle(db)
 
@@ -111,9 +112,9 @@ async def get_all_settings(
 @router.get("/modules")
 async def get_modules_only(
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_user),
+    _: Principal = Depends(get_principal),
 ):
-    """Lightweight payload for menu / feature gating."""
+    """Lightweight payload for menu / feature gating (any authenticated user)."""
     modules = await get_modules(db)
     app_cfg = await get_app_config(db)
     return {"app": {"name": app_cfg.get("name")}, "modules": modules}
@@ -123,14 +124,16 @@ async def get_modules_only(
 async def put_all_settings(
     body: SettingsUpdate,
     db: AsyncSession = Depends(get_db),
-    _: str = Depends(get_current_user),
+    principal: Principal = Depends(require_module("settings", "read")),
 ):
     if body.app is not None:
+        principal.require("settings", "full")
         current_app = await get_setting(db, "app_config", {})
         patch = body.app.model_dump(exclude_unset=True)
         await set_setting(db, "app_config", {**current_app, **patch})
 
     if body.modules is not None:
+        principal.require("settings_modules", "full")
         current_modules = await get_modules(db)
         merged_modules = deep_merge(current_modules, body.modules)
         # Persist only the modules document (already merged with defaults on read)
@@ -144,6 +147,7 @@ async def put_all_settings(
             await set_setting(db, "postgres_monitor", pg_existing)
 
     if body.postgres is not None:
+        principal.require("settings_modules", "full")
         existing = await get_setting(db, "postgres_monitor", DEFAULT_PG_SETTINGS)
         incoming = body.postgres.model_dump(exclude_unset=True)
         merged = _merge_password(incoming, existing)

@@ -23,6 +23,7 @@ import {
   StopOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { useAccess } from '../api/access'
 import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
 import { tablePagination } from '../utils/tablePagination'
@@ -69,12 +70,14 @@ function activeColor(state?: string) {
 }
 
 export function ServicesPage() {
+  const { canMutate } = useAccess()
   const [data, setData] = useState<Overview | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
   const [stateFilter, setStateFilter] = useState<string | undefined>('active')
   const [detail, setDetail] = useState<Detail | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const canMut = !!data?.allow_mutations && canMutate('services')
 
   const load = useCallback(() => {
     void api<Overview>('/api/services')
@@ -150,6 +153,7 @@ export function ServicesPage() {
   return (
     <div className="la-page">
       <PageHeader
+        docsKey="services"
         title="Services"
         subtitle="systemd services: status, logs, and management"
         extra={
@@ -181,7 +185,7 @@ export function ServicesPage() {
         }
       />
 
-      {!data.allow_mutations ? (
+      {!canMut ? (
         <Alert
           type="info"
           showIcon
@@ -267,7 +271,7 @@ export function ServicesPage() {
               dataIndex: 'description',
               ellipsis: true,
             },
-            ...(data.allow_mutations
+            ...(canMut
               ? [
                   {
                     title: '',
@@ -345,7 +349,7 @@ export function ServicesPage() {
               </Descriptions.Item>
             </Descriptions>
 
-            {detail.allow_mutations ? (
+            {canMut && detail.allow_mutations ? (
               <Space wrap>
                 <Button
                   type="primary"

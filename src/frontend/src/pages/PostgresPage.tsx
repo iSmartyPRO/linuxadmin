@@ -85,6 +85,7 @@ export function PostgresPage() {
   return (
     <div className="la-page">
       <PageHeader
+        docsKey="postgres"
         title="PostgreSQL"
         subtitle={`v${status.version} · ${status.host}:${status.port}${status.username ? ` · ${status.username}` : ''}`}
       />

@@ -28,6 +28,7 @@ import {
   DeleteOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
+import { useAccess } from '../api/access'
 import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
 import { tablePagination } from '../utils/tablePagination'
@@ -72,6 +73,7 @@ type Overview = {
 }
 
 export function WireGuardPage() {
+  const { canMutate } = useAccess()
   const [data, setData] = useState<Overview | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -96,7 +98,7 @@ export function WireGuardPage() {
     load()
   }, [load])
 
-  const canMut = !!data?.allow_mutations
+  const canMut = !!data?.allow_mutations && canMutate('wireguard')
   const presets = data?.route_presets || {}
 
   const runMut = async (fn: () => Promise<any>, okMsg: string) => {
@@ -175,6 +177,7 @@ export function WireGuardPage() {
   return (
     <div className="la-page">
       <PageHeader
+        docsKey="wireguard"
         title="WireGuard"
         subtitle={
           data.server

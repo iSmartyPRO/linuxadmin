@@ -1,14 +1,37 @@
 const TOKEN_KEY = 'lnxadmin_token'
 
+/** Prefer sessionStorage so a stolen XSS token does not survive browser restart. */
+function storage(): Storage {
+  try {
+    return sessionStorage
+  } catch {
+    return localStorage
+  }
+}
+
 export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
+  try {
+    return storage().getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY)
+  } catch {
+    return null
+  }
 }
 
 export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token)
+  try {
+    sessionStorage.setItem(TOKEN_KEY, token)
+    localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    localStorage.setItem(TOKEN_KEY, token)
+  }
 }
 
 export function clearToken() {
+  try {
+    sessionStorage.removeItem(TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
   localStorage.removeItem(TOKEN_KEY)
 }
 
@@ -31,6 +54,10 @@ export async function api<T = unknown>(
     }
     throw new Error('Unauthorized')
   }
+  if (res.status === 429) {
+    const text = await res.text()
+    throw new Error(text || 'Too many requests — try again later')
+  }
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || res.statusText)
@@ -39,8 +66,18 @@ export async function api<T = unknown>(
   return res.json() as Promise<T>
 }
 
+/** WebSocket URL without secrets in the query string. */
 export function wsUrl(path: string): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const token = getToken() || ''
-  return `${proto}//${window.location.host}${path}?token=${encodeURIComponent(token)}`
+  return `${proto}//${window.location.host}${path}`
+}
+
+/** Open metrics WS and authenticate with the first message (not URL). */
+export function connectAuthedWs(path: string): WebSocket {
+  const ws = new WebSocket(wsUrl(path))
+  ws.addEventListener('open', () => {
+    const token = getToken() || ''
+    ws.send(JSON.stringify({ type: 'auth', token }))
+  })
+  return ws
 }

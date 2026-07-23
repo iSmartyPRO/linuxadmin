@@ -15,12 +15,14 @@ import {
 } from 'antd'
 import { PlusOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons'
 import { api } from '../api/client'
+import { useAccess } from '../api/access'
 import { useAppSettings } from '../api/settings'
 import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
 import { tablePagination } from '../utils/tablePagination'
 
 export function FirewallPage() {
+  const { canMutate } = useAccess()
   const { moduleOpts } = useAppSettings()
   const opts = moduleOpts('firewall')
   const [data, setData] = useState<any>(null)
@@ -39,7 +41,7 @@ export function FirewallPage() {
     load()
   }, [load])
 
-  const canMut = !!data?.allow_mutations
+  const canMut = !!data?.allow_mutations && canMutate('firewall')
   const backend = data?.backend
 
   const run = async (body: Record<string, unknown>, okMsg: string) => {
@@ -81,6 +83,7 @@ export function FirewallPage() {
   return (
     <div className="la-page">
       <PageHeader
+        docsKey="firewall"
         title="Firewall"
         subtitle={`Backend ${data.backend}`}
         extra={
