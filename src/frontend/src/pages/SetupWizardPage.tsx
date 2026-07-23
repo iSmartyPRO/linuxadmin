@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { BrandLogo } from '../components/BrandLogo'
+import { useSetupStatus } from '../api/setupStatus'
 
 const SETUP_TOKEN_KEY = 'lnxadmin_setup_token'
 
@@ -64,6 +65,7 @@ async function setupFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function SetupWizardPage() {
   const navigate = useNavigate()
+  const { markConfigured } = useSetupStatus()
   const [status, setStatus] = useState<Status | null>(null)
   const [step, setStep] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -71,11 +73,18 @@ export function SetupWizardPage() {
   const [setupToken, setSetupTokenState] = useState(getSetupToken())
   const [dbForm] = Form.useForm()
   const [adminForm] = Form.useForm()
+  // Keep validated DB params in React state — Ant Design unmounts the Database
+  // form on step 3 and can drop Input.Password values before Finish.
+  const [dbParams, setDbParams] = useState<Record<string, unknown> | null>(null)
 
   useEffect(() => {
     void setupFetch<Status>('/api/setup/status')
       .then((s) => {
         setStatus(s)
+        if (s.configured) {
+          markConfigured()
+          return
+        }
         dbForm.setFieldsValue({
           host: s.suggested?.db_host || 'localhost',
           port: s.suggested?.db_port || 5432,
@@ -91,7 +100,7 @@ export function SetupWizardPage() {
         })
       })
       .catch((e) => setError(String(e)))
-  }, [adminForm, dbForm])
+  }, [adminForm, dbForm, markConfigured])
 
   if (status?.configured) return <Navigate to="/login" replace />
 
@@ -113,6 +122,7 @@ export function SetupWizardPage() {
         { method: 'POST', body: JSON.stringify(values) },
       )
       if (!res.ok) throw new Error(res.error || 'Connection failed')
+      setDbParams(values)
       message.success(res.version ? `Connected: ${res.version.split(',')[0]}` : 'Database OK')
       setStep(2)
     } catch (e) {
@@ -129,7 +139,10 @@ export function SetupWizardPage() {
       if (status?.setup_token_required && !getSetupToken()) {
         throw new Error('Enter the setup token from LNXADMIN_SETUP_TOKEN')
       }
-      const db = await dbForm.validateFields()
+      const db = dbParams ?? (await dbForm.validateFields())
+      if (!db?.password) {
+        throw new Error('Database password is missing — go back to Database and test again')
+      }
       const admin = await adminForm.validateFields()
       if (admin.admin_password !== admin.admin_password2) {
         throw new Error('Passwords do not match')
@@ -144,6 +157,9 @@ export function SetupWizardPage() {
           app_env: 'production',
         }),
       })
+      // Update shared status before navigate — otherwise /login still sees
+      // configured=false and bounces back to /setup (flash loop).
+      markConfigured()
       setSetupToken('')
       message.success('Setup complete — sign in with your admin account')
       navigate('/login', { replace: true })

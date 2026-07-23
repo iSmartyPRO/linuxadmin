@@ -3,6 +3,7 @@ import { ConfigProvider, App as AntApp, theme, Spin } from 'antd'
 import enUS from 'antd/locale/en_US'
 import { useEffect, useMemo, useState } from 'react'
 import { AuthProvider, useAuth } from './api/auth'
+import { SetupStatusProvider, useSetupStatus } from './api/setupStatus'
 import { AppSettingsProvider } from './api/settings'
 import { AccessProvider } from './api/access'
 import { AppLayout } from './layouts/AppLayout'
@@ -26,20 +27,9 @@ import { SettingsPage } from './pages/SettingsPage'
 import { ModuleGate } from './components/ModuleGate'
 import { buildAntdTheme } from './theme/tokens'
 
-function useSetupStatus() {
-  const [configured, setConfigured] = useState<boolean | null>(null)
-  useEffect(() => {
-    void fetch('/api/setup/status')
-      .then((r) => r.json())
-      .then((d) => setConfigured(!!d.configured))
-      .catch(() => setConfigured(true))
-  }, [])
-  return configured
-}
-
 function Protected({ children }: { children: React.ReactNode }) {
   const { token, loading } = useAuth()
-  const configured = useSetupStatus()
+  const { configured } = useSetupStatus()
   if (loading || configured === null) {
     return (
       <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
@@ -60,7 +50,7 @@ function Shell() {
   const [dark, setDark] = useState(() => localStorage.getItem('lnxadmin_theme') === 'dark')
   const algorithm = useMemo(() => (dark ? theme.darkAlgorithm : theme.defaultAlgorithm), [dark])
   const themed = useMemo(() => buildAntdTheme(dark), [dark])
-  const configured = useSetupStatus()
+  const { configured } = useSetupStatus()
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
@@ -225,7 +215,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Shell />
+        <SetupStatusProvider>
+          <Shell />
+        </SetupStatusProvider>
       </AuthProvider>
     </BrowserRouter>
   )
