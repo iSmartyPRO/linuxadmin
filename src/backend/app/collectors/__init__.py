@@ -1,0 +1,29 @@
+from app.collectors import (
+    disks,
+    docker,
+    fail2ban,
+    firewall,
+    network,
+    openvpn,
+    postgres,
+    services,
+    ssh_tunnel,
+    system,
+    users,
+    wireguard,
+)
+
+__all__ = [
+    "disks",
+    "docker",
+    "fail2ban",
+    "firewall",
+    "network",
+    "openvpn",
+    "postgres",
+    "services",
+    "ssh_tunnel",
+    "system",
+    "users",
+    "wireguard",
+]

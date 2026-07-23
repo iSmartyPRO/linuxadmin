@@ -1,0 +1,38 @@
+# Minimal GitLab CI — install, build, security check (no deploy)
+stages:
+  - verify
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  npm_config_cache: "$CI_PROJECT_DIR/.cache/npm"
+
+cache:
+  key: "${CI_COMMIT_REF_SLUG}"
+  paths:
+    - .cache/pip
+    - .cache/npm
+    - src/backend/.venv
+    - src/frontend/node_modules
+
+backend:
+  stage: verify
+  image: python:3.12-slim
+  script:
+    - apt-get update -qq && apt-get install -y -qq make >/dev/null
+    - make install-backend
+    - cp .env.example .env
+    # CI uses development so weak example secrets only warn
+    - sed -i 's/^LNXADMIN_ENV=.*/LNXADMIN_ENV=development/' .env
+    - cd src/backend && PYTHONPATH=. .venv/bin/python -c "from app.main import app; print('app_ok', len(app.routes))"
+  rules:
+    - if: $CI_PIPELINE_SOURCE
+
+frontend:
+  stage: verify
+  image: node:20-bookworm
+  script:
+    - apt-get update -qq && apt-get install -y -qq make >/dev/null
+    - make install-frontend
+    - make build
+  rules:
+    - if: $CI_PIPELINE_SOURCE

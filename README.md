@@ -1,0 +1,245 @@
+# Linux Admin
+
+Web-based administration panel for a Linux host: live system metrics, historical charts in PostgreSQL, Fail2ban, firewall, Docker, network, disks, users, systemd services, PostgreSQL monitoring, and an SSH tunnel jump-host module.
+
+---
+
+## Features
+
+| Area | What you get |
+|------|----------------|
+| **Overview** | Live CPU / RAM / swap / disk / network, load average, processes, temperatures, OS info |
+| **History** | Time-range charts from PostgreSQL; SSH tunnel session activity & connection log |
+| **Fail2ban** | Jail status, banned IPs, logs; optional ban/unban and jail parameter updates |
+| **Firewall** | Auto-detect ufw / firewalld / nftables / iptables |
+| **Docker** | Containers, images, disk usage |
+| **Network** | Listening / established sockets, interfaces; optional iface up/down & process kill |
+| **Disks** | Partitions, I/O, safe browse under mount points |
+| **Users / Services** | Local accounts & systemd units (mutations optional) |
+| **PostgreSQL** | Connections, cache hit, activity, statements, tables, locks, replication |
+| **SSH Tunnel** | Restricted `tun-*` users, keys, `permitopen` destinations, live sessions + history |
+| **WireGuard** | VPN server, peers, full/split/custom routes, client `.conf` download + QR codes |
+| **OpenVPN** | VPN server, clients, full/split/custom routes, `.ovpn` download (QR when small) |
+
+Destructive actions are **off by default** (`allow_mutations` per module in Settings).
+
+---
+
+## Requirements
+
+- Linux host (tested on modern distributions)
+- Python **3.12+**
+- Node.js **20+** (build time)
+- PostgreSQL **14+** (database `lnxadmin`)
+
+---
+
+## Quick start (production-style)
+
+One process serves the API **and** the built UI (default bind: `127.0.0.1:8000`).
+
+### Option A — Setup Wizard (recommended on a new host)
+
+```bash
+git clone git@git.ismarty.pro:Ilias.Aidar/linux-admin.git
+cd linux-admin
+make env
+# Leave LNXADMIN_SETUP_COMPLETE=false (default in .env.example)
+make install build
+LNXADMIN_ENV=production make run   # starts even before DB is configured
+```
+
+Open **http://127.0.0.1:8000/setup**, enter PostgreSQL + admin account. JWT is generated automatically. Modules and fine-tuning are configured later under **Settings**.
+
+### Option B — Pre-filled `.env`
+
+```bash
+make env && $EDITOR .env   # set DB, JWT (openssl rand -hex 32), admin password
+# LNXADMIN_SETUP_COMPLETE=true
+# LNXADMIN_ENV=production
+make install build migrate
+make run
+make status
+```
+
+Open **http://127.0.0.1:8000** and sign in.
+
+Useful targets:
+
+```text
+make help              # list all targets
+make check             # security validation of .env + health
+make logs              # tail .run/logs/app.log
+make stop / restart
+make systemd-install   # install/enable systemd unit (root)
+```
+
+After first start you can always change the panel database, admin password, CORS, and modules in **Settings → Connection** / **Modules** (no need to re-run the wizard).
+
+### Development (API + Vite)
+
+```bash
+make install
+make dev-backend       # terminal 1 — API with reload on :8000
+make dev-frontend      # terminal 2 — Vite on :5173 (proxies /api and /ws)
+```
+
+UI: http://127.0.0.1:5173
+
+---
+
+## Configuration
+
+**Single bootstrap file:** `.env` (never commit it). Template: `.env.example`.
+
+| Variable | Purpose |
+|----------|---------|
+| `LNXADMIN_ENV` | `development` or `production` (production refuses weak secrets) |
+| `LNXADMIN_BIND_HOST` / `PORT` | Listen address (prefer `127.0.0.1` behind a reverse proxy) |
+| `LNXADMIN_DB_*` | PostgreSQL connection |
+| `LNXADMIN_JWT_SECRET` | Signing key — use `openssl rand -hex 32` (≥ 32 chars) |
+| `LNXADMIN_ADMIN_*` | Initial admin account (created on first start) |
+| `LNXADMIN_CORS_ORIGINS` | Allowed browser origins (comma-separated) |
+| `LNXADMIN_*_INTERVAL` / `RETENTION_DAYS` | Defaults until overridden in the UI |
+
+Module toggles, mutation flags, and fine-grained options live in PostgreSQL (`app_settings`) and are edited under **Settings** in the UI.
+
+---
+
+## Deploy to other hosts (GitLab)
+
+Repository: `git@git.ismarty.pro:Ilias.Aidar/linux-admin.git`
+
+1. Push this repository to GitLab (see below).
+2. On each host:
+
+```bash
+git clone git@git.ismarty.pro:Ilias.Aidar/linux-admin.git /opt/lnxadmin
+cd /opt/lnxadmin
+make env && $EDITOR .env   # unique secrets per host
+make install build migrate
+make systemd-install       # or: make run
+```
+
+3. Put **nginx / Caddy / WireGuard / SSH tunnel** in front. Keep `LNXADMIN_BIND_HOST=127.0.0.1` so the panel is not exposed on the public interface.
+
+### First GitLab push
+
+```bash
+cd /path/to/linux-admin
+git add .
+git status                 # confirm .env is NOT listed
+git commit -m "Initial commit: Linux Admin panel"
+# If an old origin exists:
+#   git remote rename origin old-origin
+git remote add origin git@git.ismarty.pro:Ilias.Aidar/linux-admin.git
+git branch -M main
+git push --set-upstream origin --all
+git push --set-upstream origin --tags
+```
+
+CI: `.gitlab-ci.yml` runs backend import check + frontend build on every pipeline.
+
+---
+
+## Security practices
+
+Built-in:
+
+- JWT auth on API routes; WebSocket requires `?token=`
+- Production mode **refuses to start** with default/weak JWT or admin password
+- OpenAPI `/docs` disabled in production by default
+- Security headers (CSP, `X-Frame-Options`, `nosniff`, …); HSTS only behind HTTPS
+- CORS limited to configured origins and common methods/headers
+- Mutations gated per module (`allow_mutations` defaults to **false**)
+- Bind defaults to **127.0.0.1** (not `0.0.0.0`)
+- Env-based login fallback removed — only the database user is accepted
+
+Operator checklist:
+
+1. Strong `LNXADMIN_JWT_SECRET` and admin password on every host  
+2. Do not publish port 8000 publicly — use VPN, SSH tunnel, or reverse proxy + TLS + IP allowlist  
+3. Grant **minimal** passwordless sudo only for the commands you need (see below)  
+4. Keep mutations disabled until required  
+5. Rotate secrets if `.env` was ever shared or committed  
+
+Run `make check` after editing `.env`.
+
+---
+
+## Privileges (optional sudo)
+
+Read-only views often work without root. Writes need elevated rights. Example **sudoers** snippets (tighten to your needs):
+
+```sudoers
+# Fail2ban / firewall / network
+lnxadmin ALL=(root) NOPASSWD: /usr/bin/fail2ban-client, /usr/sbin/ufw, /usr/bin/firewall-cmd, /usr/sbin/nft, /usr/sbin/iptables, /usr/bin/systemctl, /sbin/ip, /bin/kill
+
+# Users / groups
+lnxadmin ALL=(root) NOPASSWD: /usr/sbin/useradd, /usr/sbin/usermod, /usr/sbin/userdel, /usr/sbin/groupadd, /usr/sbin/groupdel, /usr/bin/passwd, /usr/bin/chage, /usr/sbin/chpasswd
+
+# Services
+lnxadmin ALL=(root) NOPASSWD: /usr/bin/systemctl
+
+# SSH tunnel module
+lnxadmin ALL=(root) NOPASSWD: /usr/sbin/useradd, /usr/sbin/userdel, /usr/sbin/usermod, /usr/sbin/groupadd, /usr/bin/install, /usr/bin/tee, /bin/chmod, /bin/chown, /bin/mkdir, /usr/bin/systemctl, /usr/sbin/sshd, /bin/rm
+
+# WireGuard module
+lnxadmin ALL=(root) NOPASSWD: /usr/bin/wg, /usr/bin/wg-quick, /usr/bin/systemctl, /usr/sbin/sysctl, /usr/sbin/iptables, /usr/bin/install, /bin/mkdir, /bin/chmod, /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum
+
+# OpenVPN module
+lnxadmin ALL=(root) NOPASSWD: /usr/sbin/openvpn, /usr/bin/openvpn, /usr/bin/openssl, /usr/bin/systemctl, /usr/sbin/sysctl, /usr/sbin/iptables, /usr/bin/install, /bin/mkdir, /bin/chmod, /bin/chown, /bin/rm, /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum
+```
+
+Prefer a dedicated OS user for the service and a narrow command list.
+
+---
+
+## PostgreSQL monitoring
+
+A superuser is **not** required. Create a role with `pg_monitor` and optionally enable `pg_stat_statements`.
+
+Step-by-step: [docs/postgres-monitoring.md](docs/postgres-monitoring.md)  
+Checklist (restarts / 1C): [docs/TODO-pg-stat-statements.md](docs/TODO-pg-stat-statements.md)
+
+Monitor credentials are stored in the Settings UI, not in git.
+
+---
+
+## Project layout
+
+```text
+lnxadmin/
+├── .env.example          # bootstrap template (tracked)
+├── Makefile              # install / build / run / systemd
+├── deploy/lnxadmin.service
+├── scripts/check_security.py
+├── docs/
+└── src/
+    ├── backend/          # FastAPI + collectors + Alembic
+    └── frontend/         # React + Ant Design + Vite
+```
+
+---
+
+## API (selected)
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `POST` | `/api/auth/login` | JWT |
+| `GET` | `/api/health` | Liveness |
+| `GET` | `/api/system/...` | Live metrics |
+| `WS` | `/ws/metrics?token=` | Live stream |
+| `GET` | `/api/history/metrics` | System history |
+| `GET` | `/api/history/ssh-tunnel` | Tunnel session counts |
+| `GET` | `/api/history/ssh-tunnel/connections` | Connection log |
+| `GET` | `/api/security/...` | Fail2ban / firewall |
+| `GET` | `/api/ssh-tunnel/...` | Tunnel users & sessions |
+
+Full OpenAPI is available at `/docs` when `LNXADMIN_ENV=development` (or `LNXADMIN_DISABLE_DOCS=false`).
+
+---
+
+## License / support
+
+Internal operations tooling. Adapt sudoers and network exposure to your security policy before production use.

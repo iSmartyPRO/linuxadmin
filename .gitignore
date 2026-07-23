@@ -1,0 +1,46 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Python
+*.pyc
+__pycache__/
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+src/frontend/dist/
+*.tsbuildinfo
+
+# Runtime
+.run/
+*.log
+pids/
+*.pid
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local data / tunnels (host-specific)
+/var/lib/lnxadmin/
+*.pem
+*.key
+id_rsa*
+authorized_keys.bak
+
+# Coverage / tooling
+coverage/
+htmlcov/
+.coverage
