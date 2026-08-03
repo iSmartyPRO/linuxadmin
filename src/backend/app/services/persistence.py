@@ -154,6 +154,20 @@ DEFAULT_MODULES = {
         "default_dns": "1.1.1.1, 8.8.8.8",
         "endpoint_host": "",
     },
+    "nginx": {
+        "enabled": True,
+        "allow_mutations": False,
+        "allow_install": True,
+        "data_dir": "/var/lib/lnxadmin/nginx",
+        "managed_dir": "/etc/nginx/lnxadmin",
+        "nginx_conf": "/etc/nginx/nginx.conf",
+        "http_include": "/etc/nginx/conf.d/00-lnxadmin.conf",
+        "acme_email": "",
+        "acme_environment": "production",
+        "acme_directory_url": "",
+        "renew_days_before": 30,
+        "log_lines": 120,
+    },
 }
 
 

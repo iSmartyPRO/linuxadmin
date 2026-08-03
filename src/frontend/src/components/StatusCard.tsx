@@ -9,6 +9,7 @@ import {
   NodeIndexOutlined,
   SafetyOutlined,
   LockOutlined,
+  GlobalOutlined,
   ArrowRightOutlined,
 } from '@ant-design/icons'
 import { motion } from 'framer-motion'
@@ -24,6 +25,7 @@ type Props = {
     | 'ssh_tunnel'
     | 'wireguard'
     | 'openvpn'
+    | 'nginx'
   title: string
   ok: boolean
   description: string
@@ -40,6 +42,7 @@ const icons = {
   ssh_tunnel: <NodeIndexOutlined />,
   wireguard: <SafetyOutlined />,
   openvpn: <LockOutlined />,
+  nginx: <GlobalOutlined />,
 }
 
 export function StatusCard({ kind, title, ok, description, to }: Props) {

@@ -33,6 +33,7 @@ _MODULES = [
     "ssh_tunnel",
     "wireguard",
     "openvpn",
+    "nginx",
     "settings",
     "settings_modules",
     "settings_connection",
@@ -60,6 +61,7 @@ def _operator() -> dict[str, str]:
         "ssh_tunnel",
         "wireguard",
         "openvpn",
+        "nginx",
     ):
         p[k] = "full"
     p["settings"] = "read"

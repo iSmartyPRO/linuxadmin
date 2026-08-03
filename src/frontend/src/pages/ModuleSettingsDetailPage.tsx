@@ -502,6 +502,17 @@ function ModuleOptionsFields({
           <NumberRow label="Default port" value={mod.default_port ?? 1194} min={1} max={65535} onChange={(v) => patch({ default_port: v || 1194 })} />
         </>
       )
+    case 'nginx':
+      return (
+        <>
+          <FineSwitch label="Allow changes (install / routes / certs / apply)" checked={!!mod.allow_mutations} onChange={(v) => patch({ allow_mutations: v })} />
+          <FineSwitch label="Allow package install (apt/dnf/…)" checked={mod.allow_install !== false} onChange={(v) => patch({ allow_install: v })} />
+          <TextRow label="ACME email" value={mod.acme_email ?? ''} placeholder="admin@example.com" onChange={(v) => patch({ acme_email: v })} />
+          <TextRow label="ACME environment" value={mod.acme_environment ?? 'production'} placeholder="production | staging | custom" onChange={(v) => patch({ acme_environment: v })} />
+          <NumberRow label="Renew days before expiry" value={mod.renew_days_before ?? 30} min={1} max={90} onChange={(v) => patch({ renew_days_before: v || 30 })} />
+          <NumberRow label="Log lines" value={mod.log_lines ?? 120} min={20} max={2000} onChange={(v) => patch({ log_lines: v || 120 })} />
+        </>
+      )
     default:
       return <Typography.Text type="secondary">No extra options for this module.</Typography.Text>
   }

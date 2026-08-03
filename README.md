@@ -1,6 +1,6 @@
 # Linux Admin
 
-Web-based administration panel for a Linux host: live system metrics, historical charts in PostgreSQL, Fail2ban, firewall, Docker, network, disks, users, systemd services, PostgreSQL monitoring, and an SSH tunnel jump-host module.
+Web-based administration panel for a Linux host: live system metrics, historical charts in PostgreSQL, Fail2ban, firewall, Docker, network, disks, users, systemd services, PostgreSQL monitoring, SSH tunnel jump-host, WireGuard/OpenVPN, and an Nginx Edge reverse-proxy module (TLS, Let's Encrypt, stream/SNI).
 
 ---
 
@@ -20,6 +20,7 @@ Web-based administration panel for a Linux host: live system metrics, historical
 | **SSH Tunnel** | Restricted `tun-*` users, keys, `permitopen` destinations, live sessions + history |
 | **WireGuard** | VPN server, peers, full/split/custom routes, client `.conf` download + QR codes |
 | **OpenVPN** | VPN server, clients, full/split/custom routes, `.ovpn` download (QR when small) |
+| **Nginx Edge** | Reverse proxy (HTTP/HTTPS/TCP/UDP), TLS termination & SNI passthrough, certs, Let's Encrypt, route templates (Carbonio, Nextcloud, …), safe apply + rollback |
 | **Access** | Panel users, RBAC roles (none/read/full per module), API keys for integrations |
 | **Docs** | In-app documentation on every module + API integration guide |
 
@@ -192,6 +193,9 @@ lnxadmin ALL=(root) NOPASSWD: /usr/bin/wg, /usr/bin/wg-quick, /usr/bin/systemctl
 
 # OpenVPN module
 lnxadmin ALL=(root) NOPASSWD: /usr/sbin/openvpn, /usr/bin/openvpn, /usr/bin/openssl, /usr/bin/systemctl, /usr/sbin/sysctl, /usr/sbin/iptables, /usr/bin/install, /bin/mkdir, /bin/chmod, /bin/chown, /bin/rm, /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum
+
+# Nginx Edge module
+lnxadmin ALL=(root) NOPASSWD: /usr/sbin/nginx, /bin/systemctl, /usr/bin/systemctl, /usr/bin/certbot, /usr/bin/install, /bin/mkdir, /bin/chmod, /bin/chown, /bin/cp, /bin/mv, /bin/rm, /usr/bin/tee, /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum
 ```
 
 Prefer a dedicated OS user for the service and a narrow command list.
@@ -206,6 +210,16 @@ Step-by-step: [docs/postgres-monitoring.md](docs/postgres-monitoring.md)
 Checklist (restarts / 1C): [docs/TODO-pg-stat-statements.md](docs/TODO-pg-stat-statements.md)
 
 Monitor credentials are stored under **Settings → Modules → PostgreSQL**, not in git.
+
+---
+
+## Nginx Edge Proxy
+
+Publish apps through a managed edge nginx on this host: HTTPS reverse proxy, TLS passthrough (SNI), TCP/UDP, certificates, Let’s Encrypt, templates (Carbonio, Nextcloud, OnlyOffice, Grafana, …), and safe apply with automatic rollback.
+
+Operator guide (modes, ACME vs backends, Carbonio, troubleshooting): [docs/nginx-edge.md](docs/nginx-edge.md).
+
+Typical flow: enable module → install nginx → issue LE for the public hostname → create route from template → point WAN **80/443** at this Edge host → Apply. Backend `backend_host` must be the app server IP, not the Edge itself.
 
 ---
 
@@ -240,6 +254,9 @@ lnxadmin/
 | `GET` | `/api/history/ssh-tunnel/connections` | Connection log |
 | `GET` | `/api/security/...` | Fail2ban / firewall |
 | `GET` | `/api/ssh-tunnel/...` | Tunnel users & sessions |
+| `GET` | `/api/nginx/overview` | Edge proxy dashboard |
+| `GET`/`POST` | `/api/nginx/routes` | Routes (templates, validate, apply) |
+| `GET`/`POST` | `/api/nginx/certificates`, `/acme/*` | Certs & Let's Encrypt |
 
 Full OpenAPI is available at `/docs` when `LNXADMIN_ENV=development` (or `LNXADMIN_DISABLE_DOCS=false`).
 

@@ -52,6 +52,7 @@ export function DashboardPage() {
   const [sshTunnel, setSshTunnel] = useState<any>(null)
   const [wireguard, setWireguard] = useState<any>(null)
   const [openvpn, setOpenvpn] = useState<any>(null)
+  const [nginx, setNginx] = useState<any>(null)
   const wsRef = useRef<WebSocket | null>(null)
 
   useEffect(() => {
@@ -79,6 +80,9 @@ export function DashboardPage() {
       }
       if (isModuleEnabled('openvpn')) {
         void api('/api/openvpn/overview').then(setOpenvpn).catch(() => null)
+      }
+      if (isModuleEnabled('nginx')) {
+        void api('/api/nginx/overview').then(setNginx).catch(() => null)
       }
     }
 
@@ -125,6 +129,7 @@ export function DashboardPage() {
     isModuleEnabled('ssh_tunnel'),
     isModuleEnabled('wireguard'),
     isModuleEnabled('openvpn'),
+    isModuleEnabled('nginx'),
     isModuleEnabled('postgres'),
   ].filter(Boolean).length
 
@@ -278,6 +283,23 @@ export function DashboardPage() {
                     : openvpn?.error || 'Checking…'
                 }
                 to="/openvpn"
+              />
+            </Col>
+          ) : null}
+          {isModuleEnabled('nginx') ? (
+            <Col xs={24} sm={12} lg={cardSpan}>
+              <StatusCard
+                kind="nginx"
+                title="Nginx Edge"
+                ok={!!nginx?.available && !!nginx?.installed && !!nginx?.status?.active}
+                description={
+                  nginx?.available
+                    ? nginx.installed
+                      ? `${nginx.routes_enabled || 0} route(s) · ${nginx.status?.active ? 'up' : 'down'}`
+                      : 'Not installed'
+                    : nginx?.error || 'Checking…'
+                }
+                to="/nginx"
               />
             </Col>
           ) : null}

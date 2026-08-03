@@ -24,6 +24,7 @@ export type ModuleKey =
   | 'ssh_tunnel'
   | 'wireguard'
   | 'openvpn'
+  | 'nginx'
   | 'settings'
 
 export type ModulesConfig = Record<string, Record<string, any>>
@@ -114,6 +115,15 @@ const DEFAULT_MODULES: ModulesConfig = {
     allow_install: true,
     instance: 'lnxadmin',
     default_port: 1194,
+  },
+  nginx: {
+    enabled: true,
+    allow_mutations: false,
+    allow_install: true,
+    acme_email: '',
+    acme_environment: 'production',
+    renew_days_before: 30,
+    log_lines: 120,
   },
 }
 

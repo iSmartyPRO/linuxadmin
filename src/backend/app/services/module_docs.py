@@ -199,6 +199,49 @@ OpenVPN server with local PKI, CCD routes, and client `.ovpn` profiles.
 - **Full** — install, apply/stop, manage clients (`allow_mutations`)
 """,
     },
+    "nginx": {
+        "title": "Nginx Edge Proxy",
+        "summary": "HTTP/HTTPS/TCP/UDP reverse proxy, TLS passthrough, certificates, Let's Encrypt, route templates.",
+        "body": """
+## What it is
+Central edge proxy for publishing services: reverse proxy, TLS termination, SNI passthrough (stream + `ssl_preread`), TCP/UDP, WebSocket, HTTP/2, large header buffers, load balancing, IP ACL, certificates, and ACME (HTTP-01 / DNS-01).
+
+Managed files: `/etc/nginx/lnxadmin/` (included via `conf.d/00-lnxadmin.conf`). State: `/var/lib/lnxadmin/nginx/`.
+
+Full operator guide: repository file `docs/nginx-edge.md`.
+
+## Modes
+- **HTTP / HTTPS reverse** — Edge terminates TLS; backend http or https
+- **TLS Passthrough** — certificate stays on backend; Edge routes by SNI
+- **TCP / UDP** — stream proxy (DB, RDP, WireGuard, …)
+
+## Capabilities
+- Route CRUD + templates + validation / conflict checks
+- PEM / PFX upload, CSR, Let's Encrypt issue & renew (`auto_renew`)
+- Safe apply: preview → `nginx -t` → backup → reload → rollback
+- Backend health probes, per-route logs, Prometheus-style `/api/nginx/metrics`
+- `large_headers` for Carbonio/Zimbra-style cookie sizes
+
+## Templates
+**From template**: Nextcloud, OnlyOffice, Carbonio Web/Admin, web apps, Microsoft RDS/RDP, Portainer, Grafana, Proxmox, Home Assistant, MinIO, PostgreSQL TCP, WireGuard UDP, TLS passthrough.
+Always set **domain** and **backend_host** to the real app host — never the Edge IP (proxy loop → 400/502).
+
+## Let's Encrypt after moving NAT to Edge
+- Public web certs renew on **Edge** (WAN 80/443 → this host).
+- Backend behind HTTPS reverse can keep a private/self-signed cert (`verify_backend_tls: false`).
+- Mail ports (SMTP/IMAP) usually need a valid cert on Carbonio itself (DNS-01 or copy Edge cert after renew).
+- Old HTTP-01 on the former direct-NAT host will fail once NAT points at Edge — expected for web UI.
+
+## Carbonio tips
+- Template **Carbonio Web**: backend = Carbonio IP:443, `large_headers`, WebSocket on.
+- Clear site cookies if you still see `400 Request Header Or Cookie Too Large` after fixing the backend.
+- Restrict **Carbonio Admin** (`:6071`) with `allow_ips` or VPN.
+
+## Permissions
+- **Read** — dashboard, routes, certs, logs, config preview
+- **Full** — install, mutate routes/certs/ACME, apply/rollback (also needs `allow_mutations`)
+""",
+    },
     "settings": {
         "title": "Settings",
         "summary": "Project name, intervals, modules, connection, and access control.",

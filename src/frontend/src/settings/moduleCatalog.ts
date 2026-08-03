@@ -12,6 +12,7 @@ export type ModuleSettingKey =
   | 'ssh_tunnel'
   | 'wireguard'
   | 'openvpn'
+  | 'nginx'
 
 export type ModuleCatalogItem = {
   key: ModuleSettingKey
@@ -98,6 +99,12 @@ export const MODULE_CATALOG: ModuleCatalogItem[] = [
     title: 'OpenVPN',
     description: 'VPN server, clients, routes, .ovpn profiles',
     group: 'VPN / Access',
+  },
+  {
+    key: 'nginx',
+    title: 'Nginx Edge',
+    description: 'Reverse proxy, TLS/SNI, LE certs, templates (Carbonio, Nextcloud, …)',
+    group: 'Edge / Proxy',
   },
 ]
 

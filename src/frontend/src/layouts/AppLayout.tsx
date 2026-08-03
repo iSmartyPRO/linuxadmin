@@ -17,6 +17,7 @@ import {
   NodeIndexOutlined,
   SafetyOutlined,
   LockOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons'
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../api/auth'
@@ -101,6 +102,13 @@ const MENU: Array<{
     icon: <LockOutlined />,
     label: 'OpenVPN',
     to: '/openvpn',
+  },
+  {
+    key: '/nginx',
+    module: 'nginx',
+    icon: <GlobalOutlined />,
+    label: 'Nginx Edge',
+    to: '/nginx',
   },
   {
     key: '/users',

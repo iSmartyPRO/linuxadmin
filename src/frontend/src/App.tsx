@@ -19,6 +19,7 @@ import { DisksPage } from './pages/DisksPage'
 import { SshTunnelPage } from './pages/SshTunnelPage'
 import { WireGuardPage } from './pages/WireGuardPage'
 import { OpenVpnPage } from './pages/OpenVpnPage'
+import { NginxPage } from './pages/NginxPage'
 import { UsersPage } from './pages/UsersPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { PostgresPage } from './pages/PostgresPage'
@@ -174,6 +175,14 @@ function Shell() {
               element={
                 <ModuleGate module="openvpn">
                   <OpenVpnPage />
+                </ModuleGate>
+              }
+            />
+            <Route
+              path="nginx"
+              element={
+                <ModuleGate module="nginx">
+                  <NginxPage />
                 </ModuleGate>
               }
             />
