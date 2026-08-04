@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
@@ -117,7 +118,11 @@ async def get_modules_only(
     """Lightweight payload for menu / feature gating (any authenticated user)."""
     modules = await get_modules(db)
     app_cfg = await get_app_config(db)
-    return {"app": {"name": app_cfg.get("name")}, "modules": modules}
+    return {
+        "app": {"name": app_cfg.get("name")},
+        "modules": modules,
+        "hostname": socket.gethostname(),
+    }
 
 
 @router.put("")

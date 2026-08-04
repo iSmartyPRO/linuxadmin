@@ -32,6 +32,7 @@ export type ModulesConfig = Record<string, Record<string, any>>
 type AppSettingsState = {
   loading: boolean
   appName: string
+  hostname: string
   modules: ModulesConfig
   refresh: () => Promise<void>
   isModuleEnabled: (key: ModuleKey) => boolean
@@ -133,21 +134,24 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const { token } = useAuth()
   const [loading, setLoading] = useState(true)
   const [appName, setAppName] = useState('Linux Admin')
+  const [hostname, setHostname] = useState('')
   const [modules, setModules] = useState<ModulesConfig>(DEFAULT_MODULES)
 
   const refresh = useCallback(async () => {
     if (!token) {
       setModules(DEFAULT_MODULES)
       setAppName('Linux Admin')
+      setHostname('')
       setLoading(false)
       return
     }
     setLoading(true)
     try {
-      const res = await api<{ app: { name?: string }; modules: ModulesConfig }>(
+      const res = await api<{ app: { name?: string }; modules: ModulesConfig; hostname?: string }>(
         '/api/settings/modules',
       )
       setAppName(res.app?.name || 'Linux Admin')
+      setHostname((res.hostname || '').trim())
       setModules({ ...DEFAULT_MODULES, ...(res.modules || {}) })
     } catch {
       setModules(DEFAULT_MODULES)
@@ -160,6 +164,10 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     void refresh()
   }, [refresh])
 
+  useEffect(() => {
+    document.title = hostname ? `${hostname} — ${appName}` : appName
+  }, [appName, hostname])
+
   const isModuleEnabled = useCallback(
     (key: ModuleKey) => Boolean(modules[key]?.enabled ?? true),
     [modules],
@@ -168,8 +176,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const moduleOpts = useCallback((key: ModuleKey) => modules[key] || {}, [modules])
 
   const value = useMemo(
-    () => ({ loading, appName, modules, refresh, isModuleEnabled, moduleOpts }),
-    [loading, appName, modules, refresh, isModuleEnabled, moduleOpts],
+    () => ({ loading, appName, hostname, modules, refresh, isModuleEnabled, moduleOpts }),
+    [loading, appName, hostname, modules, refresh, isModuleEnabled, moduleOpts],
   )
 
   return <AppSettingsContext.Provider value={value}>{children}</AppSettingsContext.Provider>

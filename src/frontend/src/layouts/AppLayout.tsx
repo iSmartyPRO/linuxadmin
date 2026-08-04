@@ -136,7 +136,7 @@ const MENU: Array<{
 
 export function AppLayout({ dark, onToggleTheme }: Props) {
   const { username, logout } = useAuth()
-  const { loading, appName, isModuleEnabled } = useAppSettings()
+  const { loading, appName, hostname, isModuleEnabled } = useAppSettings()
   const { loading: accessLoading, can, profile } = useAccess()
   const location = useLocation()
   const selected = '/' + (location.pathname.split('/')[1] || '')
@@ -193,7 +193,12 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
             <div className="display" style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>
               {appName}
             </div>
-            <div style={{ fontSize: 11, color: 'var(--la-muted)', marginTop: 2 }}>host control</div>
+            <div
+              style={{ fontSize: 11, color: 'var(--la-muted)', marginTop: 2 }}
+              title={hostname || undefined}
+            >
+              {hostname || '…'}
+            </div>
           </div>
         </div>
 
