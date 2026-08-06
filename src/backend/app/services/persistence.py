@@ -65,6 +65,7 @@ DEFAULT_MODULES = {
         "show_logs": True,
         "log_lines": 80,
         "allow_mutations": False,
+        "allow_install": True,
     },
     "firewall": {
         "enabled": True,

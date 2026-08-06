@@ -51,7 +51,13 @@ const DEFAULT_MODULES: ModulesConfig = {
     temperatures: true,
   },
   history: { enabled: true, record: true },
-  fail2ban: { enabled: true, show_logs: true, log_lines: 80, allow_mutations: false },
+  fail2ban: {
+    enabled: true,
+    show_logs: true,
+    log_lines: 80,
+    allow_mutations: false,
+    allow_install: true,
+  },
   firewall: { enabled: true, show_raw: true, show_logs: true, log_lines: 80, allow_mutations: false },
   docker: {
     enabled: true,

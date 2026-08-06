@@ -177,7 +177,7 @@ Read-only views often work without root. Writes need elevated rights. Example **
 
 ```sudoers
 # Fail2ban / firewall / network
-lnxadmin ALL=(root) NOPASSWD: /usr/bin/fail2ban-client, /usr/sbin/ufw, /usr/bin/firewall-cmd, /usr/sbin/nft, /usr/sbin/iptables, /usr/bin/systemctl, /sbin/ip, /bin/kill
+lnxadmin ALL=(root) NOPASSWD: /usr/bin/fail2ban-client, /usr/sbin/ufw, /usr/bin/firewall-cmd, /usr/sbin/nft, /usr/sbin/iptables, /usr/bin/systemctl, /sbin/ip, /bin/kill, /usr/bin/apt-get, /usr/bin/dnf, /usr/bin/yum, /usr/bin/install, /bin/mkdir
 
 # Users / groups
 lnxadmin ALL=(root) NOPASSWD: /usr/sbin/useradd, /usr/sbin/usermod, /usr/sbin/userdel, /usr/sbin/groupadd, /usr/sbin/groupdel, /usr/bin/passwd, /usr/bin/chage, /usr/sbin/chpasswd

@@ -49,22 +49,23 @@ Historical metrics recorded by the background worker into PostgreSQL for trend a
     },
     "fail2ban": {
         "title": "Fail2ban",
-        "summary": "Jail status, banned IPs, logs; optional ban/unban and jail parameter edits.",
+        "summary": "Jail status, banned IPs, logs; optional install, ban/unban and jail parameter edits.",
         "body": """
 ## What it is
 Manage Fail2ban jails on this host: see banned addresses, ignore lists, and recent log lines.
 
 ## Capabilities
+- Install Fail2ban via the host package manager (when not present)
 - List jails and banned IPs
 - Ban / unban / reload
 - Adjust bantime, findtime, maxretry (when mutations allowed)
 
 ## Settings
-Enable **Allow changes** for Fail2ban in Settings before mutating. Host needs fail2ban-client and appropriate sudoers.
+Enable **Allow management** for Fail2ban in Settings before mutating. Package install also needs **Allow package install**. Host needs appropriate sudoers for `fail2ban-client`, `systemctl`, and the package manager (`apt-get` / `dnf` / `yum`).
 
 ## Permissions
 - **Read** — view status and logs
-- **Full** — ban/unban and parameter changes (also requires module `allow_mutations`)
+- **Full** — install, ban/unban and parameter changes (also requires module `allow_mutations`)
 """,
     },
     "firewall": {
@@ -357,6 +358,7 @@ Every module endpoint requires at least **read**. Mutations (POST/PUT/DELETE tha
 | GET | `/api/wireguard/overview` | WireGuard status |
 | GET | `/api/openvpn/overview` | OpenVPN status |
 | GET | `/api/security/fail2ban` | Fail2ban status |
+| POST | `/api/security/fail2ban/install` | Install Fail2ban package |
 | WS | `/ws/metrics` | Send `{"type":"auth","token":"<jwt>"}` first (API keys not for WS) |
 
 ## Errors

@@ -23,6 +23,20 @@ async def _systemd_active(unit: str) -> bool:
     return code == 0 and out.strip() == "active"
 
 
+def _detect_pkg_manager() -> str | None:
+    for name in ("apt-get", "dnf", "yum", "apk", "pacman", "zypper"):
+        if shutil.which(name):
+            return name
+    return None
+
+
+def tools_status() -> dict[str, Any]:
+    return {
+        "fail2ban_client": bool(shutil.which("fail2ban-client")),
+        "pkg_manager": _detect_pkg_manager(),
+    }
+
+
 def _parse_jail_status(output: str) -> dict[str, Any]:
     result: dict[str, Any] = {
         "currently_failed": 0,
@@ -131,8 +145,9 @@ def _seconds_hint(raw: Any) -> str | None:
 
 
 async def collect_fail2ban_overview() -> dict[str, Any]:
+    tools = tools_status()
     binary = shutil.which("fail2ban-client")
-    installed = binary is not None
+    installed = bool(tools["fail2ban_client"])
     active = await _systemd_active("fail2ban") if installed else False
     jails: list[str] = []
     version = None
@@ -152,6 +167,61 @@ async def collect_fail2ban_overview() -> dict[str, Any]:
         "jails_count": len(jails),
         "jails": jails,
         "binary": binary,
+        "tools": tools,
+    }
+
+
+async def install_tools(options: dict[str, Any] | None = None) -> dict[str, Any]:
+    opts = options or {}
+    if not bool(opts.get("allow_install", True)):
+        return {"ok": False, "error": "Package install is disabled in module settings"}
+    tools = tools_status()
+    if tools["fail2ban_client"]:
+        return {"ok": True, "already": True, "tools": tools}
+
+    pm = tools["pkg_manager"]
+    if not pm:
+        return {"ok": False, "error": "No supported package manager found (apt/dnf/yum/apk/pacman/zypper)"}
+
+    if pm == "apt-get":
+        cmds = [
+            ["apt-get", "update"],
+            ["apt-get", "install", "-y", "fail2ban"],
+        ]
+    elif pm == "dnf":
+        cmds = [["dnf", "install", "-y", "fail2ban"]]
+    elif pm == "yum":
+        cmds = [["yum", "install", "-y", "fail2ban"]]
+    elif pm == "apk":
+        cmds = [["apk", "add", "--no-cache", "fail2ban"]]
+    elif pm == "pacman":
+        cmds = [["pacman", "-Sy", "--noconfirm", "fail2ban"]]
+    elif pm == "zypper":
+        cmds = [["zypper", "--non-interactive", "install", "fail2ban"]]
+    else:
+        return {"ok": False, "error": f"Unsupported package manager: {pm}"}
+
+    logs: list[str] = []
+    for cmd in cmds:
+        code, out, err = await run_privileged(cmd, timeout=300.0)
+        logs.append(f"$ {' '.join(cmd)}\n{(out or '')}{(err or '')}".strip())
+        if code != 0 and ("install" in cmd or cmd[0] in {"dnf", "yum", "apk", "pacman", "zypper"}):
+            return {
+                "ok": False,
+                "error": err or out or "install failed",
+                "log": "\n\n".join(logs)[-8000:],
+            }
+
+    await run_privileged(["systemctl", "enable", "fail2ban"], timeout=30.0)
+    await run_privileged(["systemctl", "start", "fail2ban"], timeout=30.0)
+
+    tools = tools_status()
+    ok = bool(tools["fail2ban_client"])
+    return {
+        "ok": ok,
+        "tools": tools,
+        "log": "\n\n".join(logs)[-8000:],
+        "error": None if ok else "fail2ban still missing after install",
     }
 
 

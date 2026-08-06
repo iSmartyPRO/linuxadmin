@@ -22,6 +22,7 @@ import {
   PlusOutlined,
   CloseOutlined,
   SettingOutlined,
+  ToolOutlined,
 } from '@ant-design/icons'
 import { api } from '../api/client'
 import { useAccess } from '../api/access'
@@ -73,30 +74,39 @@ export function Fail2banPage() {
   const canMut = !!data?.allow_mutations && canMutate('fail2ban')
   const help = data?.param_help || {}
 
-  const run = async (body: Record<string, unknown>, okMsg: string) => {
+  const runMut = async (fn: () => Promise<any>, okMsg: string) => {
     setBusy(true)
     try {
-      const res = await api<{ ok?: boolean; error?: string; warning?: string }>(
-        '/api/security/fail2ban/action',
-        {
-          method: 'POST',
-          body: JSON.stringify(body),
-        },
-      )
+      const res = await fn()
       if (res?.ok === false) {
         message.error(res.error || 'Error')
-        return false
+        return null
       }
       if (res?.warning) message.warning(res.warning)
       else message.success(okMsg)
       load()
-      return true
+      return res
     } catch (e) {
       message.error(String(e))
-      return false
+      return null
     } finally {
       setBusy(false)
     }
+  }
+
+  const run = async (body: Record<string, unknown>, okMsg: string) => {
+    const res = await runMut(
+      () =>
+        api<{ ok?: boolean; error?: string; warning?: string }>(
+          '/api/security/fail2ban/action',
+          {
+            method: 'POST',
+            body: JSON.stringify(body),
+          },
+        ),
+      okMsg,
+    )
+    return !!res
   }
 
   const openParams = (jail: Jail) => {
@@ -117,35 +127,43 @@ export function Fail2banPage() {
   if (error) return <Alert type="error" message={error} showIcon />
   if (!data) return <Typography.Text type="secondary">Loading…</Typography.Text>
 
-  if (!data.installed) {
-    return (
-      <div className="la-page">
-        <PageHeader title="Fail2ban" subtitle="Protection against brute-force attacks" />
-        <Alert
-          type="info"
-          showIcon
-          message="Fail2ban is not installed"
-          description="Install fail2ban and start the service to see jails and banned IPs."
-        />
-      </div>
-    )
-  }
-
   return (
     <div className="la-page">
       <PageHeader
         docsKey="fail2ban"
         title="Fail2ban"
-        subtitle={`${data.version || 'version unknown'} · ${data.jails_count} jail(s)`}
+        subtitle={
+          data.installed
+            ? `${data.version || 'version unknown'} · ${data.jails_count} jail(s)`
+            : 'Protection against brute-force attacks'
+        }
         extra={
           <Space wrap>
-            <Tag color={data.active ? 'success' : 'warning'} style={{ marginInlineEnd: 0 }}>
-              {data.active ? 'active' : 'inactive'}
-            </Tag>
+            {data.installed ? (
+              <Tag color={data.active ? 'success' : 'warning'} style={{ marginInlineEnd: 0 }}>
+                {data.active ? 'active' : 'inactive'}
+              </Tag>
+            ) : null}
             <Button icon={<ReloadOutlined />} onClick={load}>
               Refresh
             </Button>
-            {canMut ? (
+            {!data.installed ? (
+              <Button
+                type="primary"
+                icon={<ToolOutlined />}
+                disabled={!canMut}
+                loading={busy}
+                onClick={() =>
+                  void runMut(
+                    () => api('/api/security/fail2ban/install', { method: 'POST', body: '{}' }),
+                    'Fail2ban installed',
+                  )
+                }
+              >
+                Install
+              </Button>
+            ) : null}
+            {canMut && data.installed ? (
               <>
                 <Button
                   loading={busy}
@@ -184,7 +202,15 @@ export function Fail2banPage() {
         }
       />
 
-      {!canMut ? (
+      {!data.installed ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="Fail2ban is not installed"
+          description={`Install fail2ban via the button above (package manager: ${data.tools?.pkg_manager || 'unknown'}). Enable “Allow management” in Settings if the button is disabled.`}
+        />
+      ) : !canMut ? (
         <Alert
           type="info"
           showIcon
@@ -199,6 +225,9 @@ export function Fail2banPage() {
           message="Ban conditions: maxretry failures within findtime → ban for bantime. Can be saved to jail.d."
         />
       )}
+
+      {!data.installed ? null : (
+        <>
 
       <Panel>
         <Descriptions size="small" column={{ xs: 1, sm: 2 }}>
@@ -488,6 +517,8 @@ export function Fail2banPage() {
           </Form.Item>
         </Form>
       </Modal>
+        </>
+      )}
     </div>
   )
 }

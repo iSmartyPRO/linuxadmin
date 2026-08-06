@@ -408,7 +408,8 @@ function ModuleOptionsFields({
     case 'fail2ban':
       return (
         <>
-          <FineSwitch label="Allow management (ban/unban/reload/start/stop)" checked={!!mod.allow_mutations} onChange={(v) => patch({ allow_mutations: v })} />
+          <FineSwitch label="Allow management (install / ban/unban/reload/start/stop)" checked={!!mod.allow_mutations} onChange={(v) => patch({ allow_mutations: v })} />
+          <FineSwitch label="Allow package install (apt/dnf/…)" checked={mod.allow_install !== false} onChange={(v) => patch({ allow_install: v })} />
           <FineSwitch label="Show log tail" checked={!!mod.show_logs} onChange={(v) => patch({ show_logs: v })} />
           <NumberRow label="Log lines" value={mod.log_lines ?? 80} min={10} max={500} onChange={(v) => patch({ log_lines: v || 80 })} />
         </>

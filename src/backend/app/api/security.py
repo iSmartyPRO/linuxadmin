@@ -107,7 +107,18 @@ async def fail2ban_details(
         }
     data = await f2b.collect_fail2ban_details(log_lines=int(mod.get("log_lines") or 80))
     data["allow_mutations"] = bool(mod.get("allow_mutations", False))
+    data["allow_install"] = bool(mod.get("allow_install", True))
     return data
+
+
+@router.post("/fail2ban/install")
+async def fail2ban_install(
+    db: AsyncSession = Depends(get_db),
+    _: Principal = Depends(require_module("fail2ban", "full")),
+):
+    mod = await _mod(db, "fail2ban")
+    _require_mutations(mod, "Fail2ban")
+    return await f2b.install_tools(mod)
 
 
 @router.post("/fail2ban/action")
