@@ -9,7 +9,7 @@ Web-based administration panel for a Linux host: live system metrics, historical
 | Area | What you get |
 |------|----------------|
 | **Overview** | Live CPU / RAM / swap / disk / network, load average, processes, temperatures, OS info |
-| **History** | Time-range charts from PostgreSQL; SSH tunnel session activity & connection log |
+| **History** | Time-range charts from PostgreSQL; SSH tunnel activity, traffic rates, and connection log |
 | **Fail2ban** | Jail status, banned IPs, logs; optional ban/unban and jail parameter updates |
 | **Firewall** | Auto-detect ufw / firewalld / nftables / iptables |
 | **Docker** | Containers, images, disk usage |
@@ -17,7 +17,7 @@ Web-based administration panel for a Linux host: live system metrics, historical
 | **Disks** | Partitions, I/O, safe browse under mount points |
 | **Users / Services** | Local accounts & systemd units (mutations optional) |
 | **PostgreSQL** | Connections, cache hit, activity, statements, tables, locks, replication |
-| **SSH Tunnel** | Restricted `tun-*` users, keys, `permitopen` destinations, live sessions + history |
+| **SSH Tunnel** | Jump-host users (`nologin`), keys / BYOK, `permitopen` destinations, live sessions (duration + TCP traffic), history, client ZIP pack |
 | **WireGuard** | VPN server, peers, full/split/custom routes, client `.conf` download + QR codes |
 | **OpenVPN** | VPN server, clients, full/split/custom routes, `.ovpn` download (QR when small) |
 | **Nginx Edge** | Reverse proxy (HTTP/HTTPS/TCP/UDP), TLS termination & SNI passthrough, certs, Let's Encrypt, route templates (Carbonio, Nextcloud, …), safe apply + rollback |
@@ -44,8 +44,8 @@ One process serves the API **and** the built UI (default bind: `127.0.0.1:8000`)
 ### Option A — Setup Wizard (recommended on a new host)
 
 ```bash
-git clone git@git.ismarty.pro:Ilias.Aidar/linux-admin.git
-cd linux-admin
+git clone https://github.com/iSmartyPRO/linuxadmin.git
+cd linuxadmin
 make env
 # Leave LNXADMIN_SETUP_COMPLETE=false (default in .env.example)
 make install build
@@ -109,39 +109,21 @@ Module toggles, mutation flags, and fine-grained options live in PostgreSQL (`ap
 
 ---
 
-## Deploy to other hosts (GitLab)
+## Deploy to other hosts
 
-Repository: `git@git.ismarty.pro:Ilias.Aidar/linux-admin.git`
-
-1. Push this repository to GitLab (see below).
-2. On each host:
+**Source:** [github.com/iSmartyPRO/linuxadmin](https://github.com/iSmartyPRO/linuxadmin)
 
 ```bash
-git clone git@git.ismarty.pro:Ilias.Aidar/linux-admin.git /opt/lnxadmin
+git clone https://github.com/iSmartyPRO/linuxadmin.git /opt/lnxadmin
 cd /opt/lnxadmin
 make env && $EDITOR .env   # unique secrets per host
 make install build migrate
 make systemd-install       # or: make run
 ```
 
-3. Put **nginx / Caddy / WireGuard / SSH tunnel** in front. Keep `LNXADMIN_BIND_HOST=127.0.0.1` so the panel is not exposed on the public interface.
+Put **nginx / Caddy / WireGuard / SSH tunnel** in front. Keep `LNXADMIN_BIND_HOST=127.0.0.1` so the panel is not exposed on the public interface.
 
-### First GitLab push
-
-```bash
-cd /path/to/linux-admin
-git add .
-git status                 # confirm .env is NOT listed
-git commit -m "Initial commit: Linux Admin panel"
-# If an old origin exists:
-#   git remote rename origin old-origin
-git remote add origin git@git.ismarty.pro:Ilias.Aidar/linux-admin.git
-git branch -M main
-git push --set-upstream origin --all
-git push --set-upstream origin --tags
-```
-
-CI: `.gitlab-ci.yml` runs backend import check + frontend build on every pipeline.
+Notes from a real host deploy: [docs/deploy-issues.md](docs/deploy-issues.md).
 
 ---
 
@@ -213,6 +195,31 @@ Monitor credentials are stored under **Settings → Modules → PostgreSQL**, no
 
 ---
 
+## SSH Tunnel (jump host)
+
+Restricted accounts for **LocalForward-only** access (no interactive shell). Typical use: developers reach an internal SSH/RDP/DB host through a public jump without full VPN.
+
+| Concept | Details |
+|---------|---------|
+| Accounts | Prefix configurable (e.g. `bsktun-` / `tun-`); shell `nologin`; group match in sshd drop-in |
+| Destinations | Per-user `permitopen` list (`host:port`) rewritten into `authorized_keys` |
+| Keys | Generate RSA 4096 in the UI **or** add a user-supplied pubkey (**BYOK** — private key never on the server) |
+| Public vs listen port | **Public SSH port** = value for client configs / NAT; **local sshd listen port** = where sessions are detected (default `22`) |
+| Live sessions | Active `-N` tunnels: client, duration, TCP RX/TX (via `ss`), active forwards |
+| History | Snapshots + connect/disconnect log (duration, traffic); charts under **History → SSH Tunnel** |
+| Client pack | **Download ZIP**: `instructions.html` (setup, BYOK, VS Code/Cursor Remote SSH, troubleshooting), `ssh_config`, optional private key, `README.txt` |
+
+Client connect pattern:
+
+```bash
+ssh -N tunnel-<username>          # keep running (no shell)
+ssh -p <local_port> user@127.0.0.1   # or VS Code / Cursor Remote-SSH to 127.0.0.1:<local_port>
+```
+
+Settings: **Settings → Modules → SSH Tunnel** (`public_hostname`, `public_port`, `listen_port`, history interval, mutations).
+
+---
+
 ## Nginx Edge Proxy
 
 Publish apps through a managed edge nginx on this host: HTTPS reverse proxy, TLS passthrough (SNI), TCP/UDP, certificates, Let’s Encrypt, templates (Carbonio, Nextcloud, OnlyOffice, Grafana, …), and safe apply with automatic rollback.
@@ -250,10 +257,12 @@ lnxadmin/
 | `GET` | `/api/system/...` | Live metrics |
 | `WS` | `/ws/metrics` | Live stream (auth via first JSON message) |
 | `GET` | `/api/history/metrics` | System history |
-| `GET` | `/api/history/ssh-tunnel` | Tunnel session counts |
-| `GET` | `/api/history/ssh-tunnel/connections` | Connection log |
+| `GET` | `/api/history/ssh-tunnel` | Tunnel session counts (+ aggregate traffic rates) |
+| `GET` | `/api/history/ssh-tunnel/connections` | Connection log (duration, bytes, status) |
 | `GET` | `/api/security/...` | Fail2ban / firewall |
-| `GET` | `/api/ssh-tunnel/...` | Tunnel users & sessions |
+| `GET` | `/api/ssh-tunnel` | Overview: users, live sessions |
+| `GET`/`POST` | `/api/ssh-tunnel/users/...` | Users, keys, destinations, ssh-config |
+| `POST` | `/api/ssh-tunnel/users/{user}/client-pack` | ZIP: instructions + config + optional key |
 | `GET` | `/api/nginx/overview` | Edge proxy dashboard |
 | `GET`/`POST` | `/api/nginx/routes` | Routes (templates, validate, apply) |
 | `GET`/`POST` | `/api/nginx/certificates`, `/acme/*` | Certs & Let's Encrypt |
