@@ -1185,6 +1185,19 @@ def build_instructions_html(pack: dict[str, Any]) -> str:
 
     first_lp = int(forwards[0]["local_port"]) if forwards else 22022
     first_label = html.escape(str((forwards[0].get("label") if forwards else None) or "remote host"))
+    # Example hosts/ports for LocalForward syntax section (prefer real pack destinations)
+    ex_http = next((fw for fw in forwards if int(fw.get("port") or 0) in (80, 443, 8080)), None)
+    ex_api = next((fw for fw in forwards if int(fw.get("port") or 0) in (8000, 8443, 3000)), None)
+    ex_ssh = next((fw for fw in forwards if int(fw.get("port") or 0) == 22), forwards[0] if forwards else None)
+    ex_http_host = html.escape(str((ex_http or {}).get("host") or "192.168.130.8"))
+    ex_http_rport = int((ex_http or {}).get("port") or 80)
+    ex_http_lport = int((ex_http or {}).get("local_port") or 8080)
+    ex_api_host = html.escape(str((ex_api or {}).get("host") or "192.168.130.8"))
+    ex_api_rport = int((ex_api or {}).get("port") or 8000)
+    ex_api_lport = int((ex_api or {}).get("local_port") or 8000)
+    ex_ssh_host = html.escape(str((ex_ssh or {}).get("host") or "192.168.130.8"))
+    ex_ssh_rport = int((ex_ssh or {}).get("port") or 22)
+    ex_ssh_lport = int((ex_ssh or {}).get("local_port") or first_lp)
 
     # Host blocks for IDE Remote SSH (destinations that look like SSH)
     ide_host_blocks: list[str] = []
@@ -1570,6 +1583,7 @@ th {{ color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: .0
         <li><a href="#ssh-config">SSH config</a></li>
         <li><a href="#start-tunnel">Запуск туннеля</a></li>
         <li><a href="#use-services">Доступ к сервисам</a></li>
+        <li><a href="#localforward">Синтаксис LocalForward</a></li>
         <li><a href="#examples">Примеры</a></li>
         <li><a href="#ide">VS Code / Cursor / IDE</a></li>
         <li><a href="#windows">Windows</a></li>
@@ -1656,6 +1670,41 @@ chmod 600 ~/.ssh/config</pre>
         <div class="callout warn">
           Если локальный порт занят — измените <em>левое</em> число в <code>LocalForward</code>
           (например <code>41736</code> → <code>45001</code>) и перезапустите туннель.
+        </div>
+      </section>
+
+      <section id="localforward">
+        <h2>Синтаксис LocalForward (важно)</h2>
+        <p class="lead">
+          Формат OpenSSH: слева — <strong>порт на вашем ПК</strong>, справа — куда идти с jump-хоста.
+        </p>
+        <pre>LocalForward &lt;локальный_порт&gt; &lt;хост&gt;:&lt;порт&gt;
+
+# правильно — веб на http://127.0.0.1:{ex_http_lport}
+LocalForward {ex_http_lport} {ex_http_host}:{ex_http_rport}
+
+# правильно — API/панель на http://127.0.0.1:{ex_api_lport}
+LocalForward {ex_api_lport} {ex_api_host}:{ex_api_rport}
+
+# правильно — SSH на целевой сервер
+LocalForward {ex_ssh_lport} {ex_ssh_host}:{ex_ssh_rport}</pre>
+        <div class="callout danger">
+          <strong>Частая ошибка:</strong> писать IP слева или одинаковые «удалённые» адреса с обеих сторон.
+          Так <em>не работает</em>:
+          <pre style="margin-top:10px"># НЕПРАВИЛЬНО — слева должен быть локальный порт ПК, не 192.168.x.x
+LocalForward {ex_http_host}:{ex_http_rport} {ex_http_host}:{ex_http_rport}
+LocalForward {ex_api_host}:{ex_api_rport} {ex_api_host}:{ex_api_rport}</pre>
+        </div>
+        <h3>Почему не открывается «localhost:80»</h3>
+        <ul>
+          <li>В браузере нужен адрес вида <code>http://127.0.0.1:{ex_http_lport}</code> — тот порт, что <em>слева</em> в <code>LocalForward</code>.</li>
+          <li>Порт <strong>80</strong> на вашем ПК часто занят (IIS, Skype, другой nginx) или требует прав администратора. Поэтому обычно используют высокий порт (например <strong>{ex_http_lport}</strong>), а не 80.</li>
+          <li>Не открывайте в браузере внутренний IP <code>http://{ex_http_host}</code> с домашнего ПК — он недоступен без туннеля. Работает только через <code>127.0.0.1:&lt;локальный_порт&gt;</code>.</li>
+          <li>Не дописывайте свои <code>LocalForward</code> «наугад»: справа разрешены только destinations из панели администратора. Иначе будет <em>administratively prohibited</em>.</li>
+        </ul>
+        <div class="callout">
+          Лучше взять готовый блок из файла <code>ssh_config</code> этого ZIP (или заново скачать пакет в Linux Admin),
+          чем править порты вручную.
         </div>
       </section>
 
@@ -1813,7 +1862,19 @@ pwd</pre>
         <h3>«bind: Address already in use»</h3>
         <p class="muted">Локальный порт занят. Смените левый порт в <code>LocalForward</code>.</p>
         <h3>«channel … administratively prohibited»</h3>
-        <p class="muted">Проброс на хост/порт, которого нет в разрешённых destinations. Обратитесь к администратору Linux Admin.</p>
+        <p class="muted">
+          Проброс на <code>host:port</code>, которого нет в разрешённых destinations, либо опечатка в IP/порту справа
+          (например <code>192.168.130.8:8000</code> вместо того, что задал администратор).
+          См. также <a href="#localforward">синтаксис LocalForward</a>.
+        </p>
+        <h3>Веб не открывается на localhost:80 / «сам дописал LocalForward»</h3>
+        <p class="muted">
+          Слева в <code>LocalForward</code> должен быть порт на ПК (например <code>{ex_http_lport}</code>), не
+          <code>{ex_http_host}:{ex_http_rport}</code>. В браузере:
+          <code>http://127.0.0.1:{ex_http_lport}</code>
+          (и <code>http://127.0.0.1:{ex_api_lport}</code> для бэкенда).
+          Подробнее — <a href="#localforward">раздел LocalForward</a>.
+        </p>
         <h3>Туннель сразу закрывается</h3>
         <p class="muted">Проверьте сеть/VPN до <code>{hostname}:{port}</code>, время на ПК, и что ключ соответствует пользователю <code>{username}</code>.</p>
         <h3>VS Code / Cursor: «Could not establish connection» / nologin</h3>
