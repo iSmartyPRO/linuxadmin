@@ -126,6 +126,7 @@ DEFAULT_MODULES = {
         "sshd_dropin": "/etc/ssh/sshd_config.d/99-lnxadmin-tunnels.conf",
         "public_hostname": "",
         "public_port": 22,
+        "listen_port": 22,
         "show_sessions": True,
         "record_history": True,
         "history_interval_seconds": 15,
@@ -366,6 +367,11 @@ async def persist_ssh_tunnel_history(session: AsyncSession) -> None:
                 "sessions": sessions,
                 "usernames": usernames,
                 "public_port": data.get("public_port"),
+                "listen_port": data.get("listen_port"),
+                "bytes_sent_total": data.get("bytes_sent_total"),
+                "bytes_recv_total": data.get("bytes_recv_total"),
+                "bytes_sent_rate_total": data.get("bytes_sent_rate_total"),
+                "bytes_recv_rate_total": data.get("bytes_recv_rate_total"),
             },
         )
     )
@@ -387,12 +393,23 @@ async def persist_ssh_tunnel_history(session: AsyncSession) -> None:
             row.pid = s.get("pid")
             row.forwards_count = s.get("forwards_count")
             row.payload = s
+            try:
+                row.duration_seconds = max(0, int((now - row.started_at).total_seconds()))
+            except Exception:
+                dur = s.get("duration_seconds")
+                row.duration_seconds = int(dur) if isinstance(dur, (int, float)) else row.duration_seconds
             continue
 
         started = now
         ts = s.get("started_ts")
         if isinstance(ts, (int, float)) and ts > 0:
             started = datetime.fromtimestamp(ts, tz=timezone.utc)
+        duration = s.get("duration_seconds")
+        if not isinstance(duration, (int, float)):
+            try:
+                duration = max(0, int((now - started).total_seconds()))
+            except Exception:
+                duration = None
         session.add(
             SshConnectionEvent(
                 session_key=key,
@@ -403,7 +420,7 @@ async def persist_ssh_tunnel_history(session: AsyncSession) -> None:
                 status="active",
                 started_at=started,
                 ended_at=None,
-                duration_seconds=None,
+                duration_seconds=int(duration) if duration is not None else None,
                 forwards_count=s.get("forwards_count"),
                 payload=s,
             )
@@ -418,6 +435,7 @@ async def persist_ssh_tunnel_history(session: AsyncSession) -> None:
             row.duration_seconds = max(0, int((now - row.started_at).total_seconds()))
         except Exception:
             row.duration_seconds = None
+        # Keep last known traffic counters in payload (already refreshed while active)
 
     await session.commit()
 

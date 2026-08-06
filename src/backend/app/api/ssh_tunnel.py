@@ -4,6 +4,7 @@ import asyncio
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +52,11 @@ class SshConfigBody(BaseModel):
         description="random|same|custom — local port for LocalForward",
     )
     local_forwards: Optional[List[dict[str, Any]]] = None
+
+
+class ClientPackBody(SshConfigBody):
+    private_key: Optional[str] = Field(default=None, max_length=32768)
+    private_key_filename: Optional[str] = Field(default=None, max_length=128)
 
 
 class EnsureBody(BaseModel):
@@ -263,4 +269,39 @@ async def ssh_config_post(
         local_port_mode=body.local_port_mode,
         identity_file=body.identity_file,
         host_alias=body.host_alias,
+    )
+
+
+@router.post("/users/{username}/client-pack")
+async def client_pack(
+    username: str,
+    body: ClientPackBody,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(get_current_user),
+    _write: Principal = Depends(require_module("ssh_tunnel", "full")),
+):
+    """ZIP: instructions.html + ssh_config + optional private key."""
+    mod = await _mod(db)
+    _require_enabled(mod)
+    pack = await asyncio.to_thread(
+        tun.build_client_pack,
+        username,
+        options=mod,
+        local_forwards=body.local_forwards,
+        local_port_mode=body.local_port_mode,
+        identity_file=body.identity_file,
+        host_alias=body.host_alias,
+        private_key=body.private_key,
+        private_key_filename=body.private_key_filename,
+    )
+    if not pack.get("ok"):
+        raise HTTPException(status_code=400, detail=pack.get("error") or "Failed to build pack")
+    filename = str(pack.get("filename") or f"ssh-tunnel-{username}.zip")
+    return Response(
+        content=pack["bytes"],
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Has-Private-Key": "1" if pack.get("has_private_key") else "0",
+        },
     )

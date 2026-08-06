@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
+import io
 import json
 import os
 import pwd
@@ -11,8 +13,10 @@ import random
 import re
 import shutil
 import socket
+import subprocess
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +37,10 @@ DEFAULT_GROUP = "lnxadmin-tunnel"
 DEFAULT_SSHD_DROPIN = "/etc/ssh/sshd_config.d/99-lnxadmin-tunnels.conf"
 MANAGED_MARKER = "# managed-by: lnxadmin-ssh-tunnel"
 SSHD_USER_RE = re.compile(r"sshd:\s*([^\s@\[]+)(?:@|\s|\[|$)")
+SS_BYTES_SENT_RE = re.compile(r"bytes_sent:(\d+)")
+SS_BYTES_RECV_RE = re.compile(r"bytes_received:(\d+)")
+# session_key -> (monotonic_ts, bytes_sent, bytes_recv) for rate calculation
+_IO_RATE_CACHE: dict[str, tuple[float, int, int]] = {}
 
 
 async def _run(cmd: list[str], timeout: float = 20.0) -> tuple[int, str, str]:
@@ -103,7 +111,10 @@ def _opts(options: dict[str, Any] | None) -> dict[str, Any]:
         "public_hostname": (o.get("public_hostname") or "").strip()
         or socket.getfqdn()
         or socket.gethostname(),
+        # Port clients connect to (may be external NAT / firewall map).
         "public_port": int(o.get("public_port") or 22),
+        # Local port where sshd actually listens (used for live session detection).
+        "listen_port": int(o.get("listen_port") or 22),
         "shell": o.get("shell") or "/usr/sbin/nologin",
         "home_base": o.get("home_base") or "/var/lib/lnxadmin/ssh-homes",
     }
@@ -1061,7 +1072,7 @@ def build_ssh_config(
         "  ExitOnForwardFailure yes",
         "  ServerAliveInterval 30",
         "  ServerAliveCountMax 3",
-        "  # RequestTTY no — tunnel only",
+        "  RequestTTY no",
     ]
 
     for fw in forwards:
@@ -1080,12 +1091,24 @@ def build_ssh_config(
     lines.append(f"# Connect: ssh -N {alias}")
     lines.append("# Connect to the service on the client: localhost:<local_port>")
 
-    usage = [
-        f"1. Save the private key to {identity} (chmod 600)",
-        "2. Add the Host block to ~/.ssh/config",
-        f"3. Start the tunnel: ssh -N {alias}",
-        "4. Local ports can be changed in LocalForward (left number) if they are busy on the PC",
-    ]
+    identity_base = identity.replace("\\", "/").rstrip("/").split("/")[-1]
+    user_owned_key = identity_base in {"id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"} or identity_base.startswith(
+        "id_"
+    )
+    if user_owned_key:
+        usage = [
+            f"1. Use your existing private key at {identity} (chmod 600) — not included when only pubkey was added",
+            "2. Add the Host block to ~/.ssh/config (adjust IdentityFile if your key path differs)",
+            f"3. Start the tunnel: ssh -N {alias}",
+            "4. Local ports can be changed in LocalForward (left number) if they are busy on the PC",
+        ]
+    else:
+        usage = [
+            f"1. Save the private key to {identity} (chmod 600)",
+            "2. Add the Host block to ~/.ssh/config",
+            f"3. Start the tunnel: ssh -N {alias}",
+            "4. Local ports can be changed in LocalForward (left number) if they are busy on the PC",
+        ]
     for fw in forwards:
         usage.append(
             f"   → localhost:{fw['local_port']} → {fw['host']}:{fw['port']}"
@@ -1096,6 +1119,7 @@ def build_ssh_config(
         "ok": True,
         "username": username,
         "host_alias": alias,
+        "identity_file": identity,
         "config": "\n".join(lines) + "\n",
         "forwards": forwards,
         "destinations": dests,
@@ -1103,6 +1127,841 @@ def build_ssh_config(
         "usage": usage,
         "public_hostname": hostname,
         "public_port": opts["public_port"],
+    }
+
+
+def _identity_basename(identity_file: str, username: str) -> str:
+    name = (identity_file or "").replace("\\", "/").split("/")[-1].strip()
+    if not name or name in (".", ".."):
+        return f"{username}_rsa4096"
+    # keep only safe filename chars
+    safe = re.sub(r"[^\w.+=@-]", "_", name)
+    return safe[:120] or f"{username}_rsa4096"
+
+
+def _looks_like_private_key(text: str) -> bool:
+    t = (text or "").strip()
+    return t.startswith("-----BEGIN") and "PRIVATE KEY-----" in t and "-----END" in t
+
+
+def build_instructions_html(pack: dict[str, Any]) -> str:
+    """Premium standalone HTML guide for the client ZIP package."""
+    username = html.escape(str(pack.get("username") or ""))
+    alias = html.escape(str(pack.get("host_alias") or f"tunnel-{pack.get('username')}"))
+    hostname = html.escape(str(pack.get("public_hostname") or ""))
+    port = int(pack.get("public_port") or 22)
+    identity = html.escape(str(pack.get("identity_file") or f"~/.ssh/{pack.get('username')}_rsa4096"))
+    key_name = html.escape(
+        str(
+            pack.get("private_key_filename")
+            or _identity_basename(identity, str(pack.get("username") or "tunnel"))
+        )
+    )
+    has_key = bool(pack.get("has_private_key"))
+    config = html.escape(str(pack.get("config") or ""))
+    forwards = pack.get("forwards") or []
+
+    forward_rows = []
+    forward_cards = []
+    for fw in forwards:
+        lp = int(fw.get("local_port") or 0)
+        host = html.escape(str(fw.get("host") or ""))
+        rport = int(fw.get("port") or 0)
+        label = html.escape(str(fw.get("label") or "").strip() or "Service")
+        forward_rows.append(
+            f"<tr><td>{label}</td><td><code>localhost:{lp}</code></td>"
+            f"<td><code>{host}:{rport}</code></td>"
+            f"<td><code>ssh -p {lp} user@127.0.0.1</code></td></tr>"
+        )
+        forward_cards.append(
+            f'<div class="map"><span class="pill">localhost:{lp}</span>'
+            f'<span class="arrow">→</span><span class="pill dim">{host}:{rport}</span>'
+            f'<span class="lbl">{label}</span></div>'
+        )
+    forwards_table = "\n".join(forward_rows) or (
+        "<tr><td colspan='4'>Назначения ещё не заданы — попросите администратора добавить destinations.</td></tr>"
+    )
+    forwards_maps = "\n".join(forward_cards) or '<p class="muted">Нет LocalForward в этом пакете.</p>'
+
+    first_lp = int(forwards[0]["local_port"]) if forwards else 22022
+    first_label = html.escape(str((forwards[0].get("label") if forwards else None) or "remote host"))
+
+    # Host blocks for IDE Remote SSH (destinations that look like SSH)
+    ide_host_blocks: list[str] = []
+    ide_ssh_forwards = [
+        fw
+        for fw in forwards
+        if int(fw.get("port") or 0) == 22
+        or "ssh" in str(fw.get("label") or "").lower()
+    ]
+    if not ide_ssh_forwards and forwards:
+        # still show an example using the first forward
+        ide_ssh_forwards = [forwards[0]]
+    for idx, fw in enumerate(ide_ssh_forwards):
+        lp = int(fw.get("local_port") or 0)
+        label_raw = str(fw.get("label") or "").strip() or f"host-{idx + 1}"
+        safe_alias = re.sub(r"[^\w.-]+", "-", label_raw.lower()).strip("-")[:40] or f"dev-{idx + 1}"
+        host_alias_ide = f"via-tunnel-{safe_alias}"
+        ide_host_blocks.append(
+            f"Host {host_alias_ide}\n"
+            f"  HostName 127.0.0.1\n"
+            f"  Port {lp}\n"
+            f"  User yourlogin\n"
+            f"  # IdentityFile ~/.ssh/id_ed25519   # ключ УЧЁТКИ на целевом сервере\n"
+            f"  IdentitiesOnly yes"
+        )
+    ide_hosts_pre = html.escape(
+        "\n\n".join(ide_host_blocks)
+        if ide_host_blocks
+        else (
+            f"Host via-tunnel-dev\n"
+            f"  HostName 127.0.0.1\n"
+            f"  Port {first_lp}\n"
+            f"  User yourlogin\n"
+            f"  IdentitiesOnly yes"
+        )
+    )
+    first_ide_alias = "via-tunnel-dev"
+    if ide_host_blocks:
+        m = re.search(r"^Host\s+(\S+)", ide_host_blocks[0], re.M)
+        if m:
+            first_ide_alias = html.escape(m.group(1))
+
+    if has_key:
+        key_chip = f'<div class="chip">Key in ZIP <strong class="mono">{key_name}</strong></div>'
+        key_file_card = (
+            f"<div class='file'><div class='ico'>03</div><div><strong>{key_name}</strong>"
+            f"<div class='muted'>Приватный SSH-ключ из архива. Храните только у себя.</div></div></div>"
+        )
+        install_key_section = f"""
+      <section id="install-key">
+        <h2>1. Установка приватного ключа</h2>
+        <p class="lead">В архиве есть файл ключа <code>{key_name}</code> — скопируйте его в <code>~/.ssh/</code>.</p>
+        <div class="steps">
+          <div class="step">
+            <div>
+              <strong>Создайте каталог ~/.ssh (если его нет)</strong>
+              <pre>mkdir -p ~/.ssh
+chmod 700 ~/.ssh</pre>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <strong>Скопируйте ключ и ограничьте права</strong>
+              <pre>cp {key_name} ~/.ssh/{key_name}
+chmod 600 ~/.ssh/{key_name}</pre>
+              <p>На Windows (OpenSSH): свойства файла → безопасность → доступ только вашей учётной записи.</p>
+            </div>
+          </div>
+        </div>
+        <div class="callout warn">
+          Без <code>chmod 600</code> OpenSSH часто отказывается использовать ключ
+          (<em>WARNING: UNPROTECTED PRIVATE KEY FILE</em>).
+        </div>
+      </section>"""
+        windows_key_steps = f"""mkdir $env:USERPROFILE\\.ssh
+copy {key_name} $env:USERPROFILE\\.ssh\\{key_name}
+# права: только ваша учётка (Properties → Security)
+
+notepad $env:USERPROFILE\\.ssh\\config
+# вставьте содержимое ssh_config; IdentityFile должен указывать на ключ:
+# IdentityFile C:\\Users\\YOU\\.ssh\\{key_name}
+
+ssh -N {alias}"""
+        unix_key_steps = f"""chmod 700 ~/.ssh
+cp {key_name} {identity}
+chmod 600 {identity}
+cat ssh_config >> ~/.ssh/config
+chmod 600 ~/.ssh/config
+ssh -N {alias}"""
+        identity_callout = (
+            f"Параметр <code>IdentityFile {identity}</code> должен указывать на файл ключа из архива. "
+            "Если положили ключ в другое место — поправьте путь."
+        )
+        hero_note = (
+            "В этом пакете <strong>есть приватный ключ</strong>. Не пересылайте ZIP в открытых чатах — "
+            "лучше передать архив защищённым каналом."
+        )
+    else:
+        key_chip = (
+            '<div class="chip">Key mode <strong>свой ключ (BYOK)</strong></div>'
+        )
+        key_file_card = (
+            "<div class='file'><div class='ico'>03</div><div><strong>Приватный ключ — не в архиве</strong>"
+            "<div class='muted'>Вы (или разработчик) прислали администратору только <em>публичный</em> ключ. "
+            "Приватный ключ остаётся у вас на ПК — в ZIP его нет и не должно быть.</div></div></div>"
+        )
+        install_key_section = f"""
+      <section id="install-key">
+        <h2>1. Ваш приватный ключ (BYOK)</h2>
+        <p class="lead">
+          Администратор добавил на jump-хост <strong>ваш публичный ключ</strong>.
+          Приватный ключ <strong>не входит</strong> в этот ZIP — он уже должен быть у вас
+          (типичные пути: <code>~/.ssh/id_ed25519</code>, <code>~/.ssh/id_rsa</code>).
+        </p>
+        <div class="callout">
+          Это нормальный и предпочтительный сценарий для разработчиков:
+          вы генерируете пару ключей у себя → отправляете только <code>.pub</code> →
+          получаете пакет с <code>ssh_config</code> и инструкцией.
+        </div>
+        <div class="steps">
+          <div class="step">
+            <div>
+              <strong>Проверьте, что приватный ключ на месте</strong>
+              <pre>ls -la ~/.ssh/
+# ожидайте файл без суффикса .pub, например:
+# id_ed25519     ← приватный (никому не отправлять)
+# id_ed25519.pub ← публичный (его как раз принимают на сервере)</pre>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <strong>Укажите путь в IdentityFile</strong>
+              <p>В <code>ssh_config</code> сейчас задано:</p>
+              <pre>IdentityFile {identity}</pre>
+              <p>Если ваш ключ лежит иначе — поправьте строку, например:</p>
+              <pre>IdentityFile ~/.ssh/id_ed25519
+# или
+IdentityFile ~/.ssh/id_rsa
+# или
+IdentityFile ~/.ssh/my_work_key</pre>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <strong>Права на ключ</strong>
+              <pre>chmod 700 ~/.ssh
+chmod 600 {identity}</pre>
+            </div>
+          </div>
+        </div>
+        <div class="callout warn">
+          Публичный и приватный ключ — пара. Если на сервере лежит не тот <code>.pub</code>,
+          или <code>IdentityFile</code> указывает не на парный приватный файл, будет
+          <em>Permission denied (publickey)</em>.
+        </div>
+      </section>"""
+        windows_key_steps = f"""# Приватный ключ уже у вас — в ZIP его нет.
+# Убедитесь, что файл существует, например:
+#   C:\\Users\\YOU\\.ssh\\id_ed25519
+
+notepad $env:USERPROFILE\\.ssh\\config
+# вставьте ssh_config и при необходимости поправьте:
+# IdentityFile C:\\Users\\YOU\\.ssh\\id_ed25519
+
+ssh -N {alias}"""
+        unix_key_steps = f"""# Приватный ключ уже у вас (не копируется из ZIP)
+ls -la {identity}
+chmod 600 {identity}
+cat ssh_config >> ~/.ssh/config
+chmod 600 ~/.ssh/config
+# при необходимости отредактируйте IdentityFile в ~/.ssh/config
+ssh -N {alias}"""
+        identity_callout = (
+            f"Режим <strong>свой ключ</strong>: <code>IdentityFile {identity}</code> должен указывать "
+            "на <em>ваш</em> существующий приватный ключ (тот, чья публичная часть уже на сервере)."
+        )
+        hero_note = (
+            "Приватный ключ <strong>не включён</strong> в пакет — использован ваш публичный ключ (BYOK). "
+            "Настройте <code>IdentityFile</code> на путь к своему приватному ключу."
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SSH Tunnel — {username}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root {{
+  --bg0: #07111f;
+  --bg1: #0c1a2e;
+  --bg2: #12263f;
+  --card: rgba(18, 38, 63, 0.72);
+  --line: rgba(148, 163, 184, 0.18);
+  --text: #e8eef7;
+  --muted: #94a3b8;
+  --accent: #14b8a6;
+  --accent2: #38bdf8;
+  --warn: #f59e0b;
+  --danger: #f43f5e;
+  --ok: #34d399;
+  --shadow: 0 24px 80px rgba(0,0,0,.45);
+  --radius: 18px;
+}}
+* {{ box-sizing: border-box; }}
+html {{ scroll-behavior: smooth; }}
+body {{
+  margin: 0;
+  min-height: 100vh;
+  color: var(--text);
+  font-family: Outfit, "Segoe UI", sans-serif;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(20,184,166,.22), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(56,189,248,.16), transparent 50%),
+    linear-gradient(180deg, var(--bg0), var(--bg1) 40%, #081525);
+  line-height: 1.55;
+}}
+a {{ color: var(--accent2); text-decoration: none; }}
+a:hover {{ text-decoration: underline; }}
+code, pre, .mono {{ font-family: "IBM Plex Mono", ui-monospace, monospace; }}
+.wrap {{ max-width: 980px; margin: 0 auto; padding: 32px 20px 80px; }}
+.hero {{
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) + 6px);
+  background: linear-gradient(145deg, rgba(20,184,166,.12), rgba(15,23,42,.55) 45%, rgba(56,189,248,.08));
+  box-shadow: var(--shadow);
+  padding: 36px 32px 28px;
+  margin-bottom: 22px;
+}}
+.hero::after {{
+  content: "";
+  position: absolute; inset: auto -20% -40% 40%;
+  height: 220px;
+  background: radial-gradient(circle, rgba(20,184,166,.25), transparent 65%);
+  pointer-events: none;
+}}
+.eyebrow {{
+  display: inline-flex; gap: 8px; align-items: center;
+  font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--accent); font-weight: 600; margin-bottom: 12px;
+}}
+.hero h1 {{
+  margin: 0 0 10px; font-size: clamp(1.8rem, 4vw, 2.5rem); letter-spacing: -0.03em; font-weight: 700;
+}}
+.hero p {{ margin: 0; max-width: 62ch; color: var(--muted); font-size: 1.05rem; }}
+.meta {{
+  display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px;
+}}
+.chip {{
+  border: 1px solid var(--line); background: rgba(2,8,23,.35);
+  border-radius: 999px; padding: 8px 14px; font-size: 13px; color: var(--muted);
+}}
+.chip strong {{ color: var(--text); font-weight: 600; }}
+.layout {{ display: grid; grid-template-columns: 240px 1fr; gap: 18px; }}
+@media (max-width: 860px) {{ .layout {{ grid-template-columns: 1fr; }} .toc {{ position: static !important; }} }}
+.toc {{
+  position: sticky; top: 18px; align-self: start;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--card); backdrop-filter: blur(10px);
+  padding: 18px 16px;
+}}
+.toc h2 {{ margin: 0 0 12px; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }}
+.toc ol {{ margin: 0; padding-left: 18px; }}
+.toc li {{ margin: 8px 0; }}
+.toc a {{ color: var(--text); font-size: 14px; }}
+.toc a:hover {{ color: var(--accent); }}
+main section {{
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--card); backdrop-filter: blur(10px);
+  padding: 26px 24px; margin-bottom: 16px;
+  scroll-margin-top: 18px;
+}}
+main h2 {{
+  margin: 0 0 8px; font-size: 1.35rem; letter-spacing: -0.02em;
+}}
+main h3 {{ margin: 22px 0 8px; font-size: 1.05rem; color: #dbeafe; }}
+.lead {{ color: var(--muted); margin: 0 0 16px; }}
+.steps {{ counter-reset: step; display: grid; gap: 12px; }}
+.step {{
+  counter-increment: step;
+  display: grid; grid-template-columns: 36px 1fr; gap: 12px;
+  padding: 14px; border-radius: 14px; border: 1px solid var(--line);
+  background: rgba(2,8,23,.28);
+}}
+.step::before {{
+  content: counter(step);
+  width: 36px; height: 36px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: linear-gradient(145deg, var(--accent), #0f766e);
+  color: #042f2e; font-weight: 700;
+}}
+.step strong {{ display: block; margin-bottom: 4px; }}
+.step p {{ margin: 0; color: var(--muted); font-size: 14px; }}
+pre {{
+  margin: 12px 0 0; padding: 14px 16px; overflow: auto;
+  border-radius: 12px; border: 1px solid var(--line);
+  background: #020617; color: #e2e8f0; font-size: 12.5px; line-height: 1.5;
+}}
+.callout {{
+  border-left: 3px solid var(--accent);
+  background: rgba(20,184,166,.08);
+  padding: 12px 14px; border-radius: 0 12px 12px 0;
+  color: var(--muted); margin: 14px 0;
+}}
+.callout.warn {{ border-left-color: var(--warn); background: rgba(245,158,11,.08); }}
+.callout.danger {{ border-left-color: var(--danger); background: rgba(244,63,94,.08); }}
+table {{
+  width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 10px;
+}}
+th, td {{ text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }}
+th {{ color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }}
+.map {{
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px;
+  background: rgba(2,8,23,.28); margin: 8px 0;
+}}
+.pill {{
+  font-family: "IBM Plex Mono", monospace; font-size: 12px;
+  padding: 5px 10px; border-radius: 999px;
+  background: rgba(20,184,166,.15); color: #99f6e4; border: 1px solid rgba(20,184,166,.35);
+}}
+.pill.dim {{ background: rgba(56,189,248,.12); color: #bae6fd; border-color: rgba(56,189,248,.3); }}
+.arrow {{ color: var(--muted); }}
+.lbl {{ color: var(--muted); font-size: 13px; margin-left: 4px; }}
+.muted {{ color: var(--muted); }}
+.files {{ display: grid; gap: 10px; }}
+.file {{
+  display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start;
+  padding: 12px; border-radius: 12px; border: 1px solid var(--line); background: rgba(2,8,23,.25);
+}}
+.file .ico {{
+  width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+  background: rgba(20,184,166,.15); color: var(--accent); font-size: 14px;
+}}
+.topbar {{
+  display: flex; justify-content: space-between; gap: 12px; align-items: center;
+  margin-bottom: 18px; flex-wrap: wrap;
+}}
+.brand {{ font-weight: 700; letter-spacing: -0.02em; }}
+.brand span {{ color: var(--accent); }}
+.footer {{
+  margin-top: 28px; color: var(--muted); font-size: 13px; text-align: center;
+}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">Linux Admin <span>·</span> SSH Tunnel</div>
+    <a href="#toc">К разделам ↓</a>
+  </div>
+
+  <header class="hero" id="overview">
+    <div class="eyebrow">Client setup pack</div>
+    <h1>Инструкция по SSH-туннелю</h1>
+    <p>
+      Этот пакет настраивает безопасный доступ через jump-хост
+      <strong>{hostname}</strong> под учётной записью <strong class="mono">{username}</strong>.
+      Туннель не даёт shell на сервере — только проброс портов к разрешённым сервисам.
+    </p>
+    <p style="margin:14px 0 0;color:var(--muted);max-width:70ch">{hero_note}</p>
+    <div class="meta">
+      <div class="chip">Host alias <strong class="mono">{alias}</strong></div>
+      <div class="chip">Jump <strong class="mono">{hostname}:{port}</strong></div>
+      {key_chip}
+      <div class="chip">IdentityFile <strong class="mono">{identity}</strong></div>
+      <div class="chip">Mode <strong>ssh -N</strong></div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="toc" id="toc" aria-label="Содержание">
+      <h2>Содержание</h2>
+      <ol>
+        <li><a href="#overview">Обзор</a></li>
+        <li><a href="#contents">Содержимое ZIP</a></li>
+        <li><a href="#install-key">Ключ (свой / из ZIP)</a></li>
+        <li><a href="#ssh-config">SSH config</a></li>
+        <li><a href="#start-tunnel">Запуск туннеля</a></li>
+        <li><a href="#use-services">Доступ к сервисам</a></li>
+        <li><a href="#examples">Примеры</a></li>
+        <li><a href="#ide">VS Code / Cursor / IDE</a></li>
+        <li><a href="#windows">Windows</a></li>
+        <li><a href="#macos-linux">macOS / Linux</a></li>
+        <li><a href="#troubleshooting">Проблемы</a></li>
+        <li><a href="#security">Безопасность</a></li>
+      </ol>
+    </nav>
+
+    <main>
+      <section id="contents">
+        <h2>Содержимое ZIP</h2>
+        <p class="lead">Распакуйте архив в удобное место. Откройте этот файл (<code>instructions.html</code>) в браузере.</p>
+        <div class="files">
+          <div class="file"><div class="ico">01</div><div><strong>instructions.html</strong><div class="muted">Эта инструкция со всеми разделами и примерами.</div></div></div>
+          <div class="file"><div class="ico">02</div><div><strong>ssh_config</strong><div class="muted">Блок <code>Host</code> для вставки в <code>~/.ssh/config</code>.</div></div></div>
+          {key_file_card}
+          <div class="file"><div class="ico">04</div><div><strong>README.txt</strong><div class="muted">Краткая шпаргалка на случай, если HTML не открывается.</div></div></div>
+        </div>
+      </section>
+
+      {install_key_section}
+
+      <section id="ssh-config">
+        <h2>2. Добавление SSH config</h2>
+        <p class="lead">
+          Откройте (или создайте) файл <code>~/.ssh/config</code> и добавьте блок из <code>ssh_config</code>.
+          Либо скопируйте фрагмент ниже целиком.
+        </p>
+        <div class="steps">
+          <div class="step">
+            <div>
+              <strong>Linux / macOS</strong>
+              <pre>nano ~/.ssh/config
+# вставьте блок Host … затем:
+chmod 600 ~/.ssh/config</pre>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <strong>Быстрая склейка из файла пакета</strong>
+              <pre>cat ssh_config >> ~/.ssh/config
+chmod 600 ~/.ssh/config</pre>
+            </div>
+          </div>
+        </div>
+        <h3>Готовый блок для этого пользователя</h3>
+        <pre>{config}</pre>
+        <div class="callout">
+          {identity_callout}
+        </div>
+      </section>
+
+      <section id="start-tunnel">
+        <h2>3. Запуск туннеля</h2>
+        <p class="lead">
+          Учётная запись туннеля <strong>не даёт интерактивный shell</strong>.
+          Всегда используйте флаг <code>-N</code> (no remote command).
+        </p>
+        <pre>ssh -N {alias}</pre>
+        <p class="muted">Команда «зависает» без приглашения — это нормально: туннель работает, пока окно открыто.</p>
+        <div class="callout">
+          Фоновый запуск (Linux/macOS): <code>ssh -fN {alias}</code><br/>
+          Проверка: <code>ssh -N -v {alias}</code> (подробный лог).
+        </div>
+        <h3>Карта пробросов</h3>
+        {forwards_maps}
+      </section>
+
+      <section id="use-services">
+        <h2>4. Подключение к сервисам через localhost</h2>
+        <p class="lead">
+          После старта туннеля сервисы доступны на <strong>вашем компьютере</strong> как
+          <code>localhost:&lt;локальный_порт&gt;</code>. Не подключайтесь напрямую к внутренним IP из интернета.
+        </p>
+        <table>
+          <thead>
+            <tr><th>Сервис</th><th>Локально</th><th>Куда ведёт</th><th>Пример</th></tr>
+          </thead>
+          <tbody>
+            {forwards_table}
+          </tbody>
+        </table>
+        <div class="callout warn">
+          Если локальный порт занят — измените <em>левое</em> число в <code>LocalForward</code>
+          (например <code>41736</code> → <code>45001</code>) и перезапустите туннель.
+        </div>
+      </section>
+
+      <section id="examples">
+        <h2>Примеры использования</h2>
+        <h3>SSH на внутренний хост (типичный PTO / server)</h3>
+        <pre># 1) в одном терминале:
+ssh -N {alias}
+
+# 2) в другом терминале — SSH на сервис за туннелем:
+ssh -p {first_lp} yourlogin@127.0.0.1
+# ({first_label})</pre>
+        <h3>SCP / SFTP через тот же порт</h3>
+        <pre>scp -P {first_lp} ./file.txt yourlogin@127.0.0.1:/tmp/
+sftp -P {first_lp} yourlogin@127.0.0.1</pre>
+        <h3>RDP / веб / БД</h3>
+        <pre># RDP (если проброшен 3389 → локальный порт L):
+# подключайтесь к 127.0.0.1:L в клиенте Remote Desktop
+
+# HTTP/HTTPS:
+# http://127.0.0.1:L
+
+# PostgreSQL / другой TCP:
+# host=127.0.0.1  port=L</pre>
+        <h3>Проверка, что порт слушает</h3>
+        <pre># Linux/macOS
+nc -vz 127.0.0.1 {first_lp}
+
+# или
+ssh -N -v {alias}   # ищите Local forwarding listening</pre>
+      </section>
+
+      <section id="ide">
+        <h2>VS Code, Cursor и другие IDE (Remote SSH)</h2>
+        <p class="lead">
+          Редакторы вроде <strong>VS Code</strong>, <strong>Cursor</strong>, VSCodium, а также JetBrains Gateway
+          умеют открывать папку на удалённом Linux-хосте по SSH. Через этот туннель вы подключаетесь
+          не к jump-пользователю, а к <strong>целевому серверу</strong> на <code>localhost:&lt;порт&gt;</code>.
+        </p>
+
+        <div class="callout danger">
+          <strong>Не подключайте Remote SSH к аккаунту туннеля</strong>
+          (<code>{username}</code> / alias <code>{alias}</code>).
+          У него shell <code>nologin</code> — IDE получит
+          «This account is currently not available» / PTY failed.
+          Сначала поднимите туннель <code>ssh -N</code>, затем в IDE открывайте
+          <em>хост за пробросом</em> (обычно порт 22 внутреннего сервера).
+        </div>
+
+        <div class="steps">
+          <div class="step">
+            <div>
+              <strong>Запустите туннель и оставьте его работать</strong>
+              <pre>ssh -N {alias}</pre>
+              <p>Пока туннель жив, на ПК слушает локальный порт (например <code>{first_lp}</code> → {first_label}).</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <strong>Добавьте Host для IDE в ~/.ssh/config</strong>
+              <p>
+                Это <em>отдельный</em> блок от tunnel-alias: он смотрит на <code>127.0.0.1</code>
+                и использует логин/ключ <strong>учётной записи на целевом сервере</strong>
+                (не ключ jump-туннеля, если это разные ключи).
+              </p>
+              <pre>{ide_hosts_pre}</pre>
+              <p class="muted">Замените <code>yourlogin</code> и при необходимости <code>IdentityFile</code>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <strong>VS Code</strong>
+              <p>Расширение <em>Remote - SSH</em> (Microsoft).</p>
+              <pre>1. F1 / Ctrl+Shift+P → “Remote-SSH: Connect to Host…”
+2. Выберите {first_ide_alias} (или введите yourlogin@127.0.0.1:{first_lp})
+3. Откройте папку проекта на сервере (Open Folder)</pre>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <strong>Cursor</strong>
+              <p>Тот же Remote SSH (командная палитра как в VS Code).</p>
+              <pre>1. Ctrl+Shift+P (Cmd+Shift+P на macOS)
+2. “Remote-SSH: Connect to Host…” → {first_ide_alias}
+3. Дождитесь установки VS Code Server / Cursor server на удалённой машине
+4. File → Open Folder</pre>
+              <p class="muted">
+                Убедитесь, что на целевом хосте есть исходящий доступ для скачивания server-компонента
+                (или офлайн-установка по документации Cursor/VS Code).
+              </p>
+            </div>
+          </div>
+          <div class="step">
+            <div>
+              <strong>Проверка из терминала IDE</strong>
+              <pre># после Connect to Host в встроенном терминале IDE вы уже на удалённом хосте:
+hostname
+pwd</pre>
+            </div>
+          </div>
+        </div>
+
+        <h3>JetBrains (Gateway / IDEA / PyCharm)</h3>
+        <pre># 1) ssh -N {alias}
+# 2) JetBrains Gateway → SSH → New Connection
+#    Host: 127.0.0.1
+#    Port: {first_lp}
+#    Username: yourlogin
+#    Authentication: ключ учётной записи на целевом сервере</pre>
+
+        <h3>Одной схемой</h3>
+        <pre>Ваш ПК
+  │
+  ├─ ssh -N {alias}          ← туннель (jump, без shell)
+  │     LocalForward {first_lp} → внутренний SSH
+  │
+  └─ VS Code / Cursor Remote-SSH
+        Host {first_ide_alias} = 127.0.0.1:{first_lp}
+        User yourlogin         ← обычный пользователь целевого сервера</pre>
+
+        <div class="callout warn">
+          Если IDE пишет <em>Could not establish connection</em> — чаще всего не запущен
+          <code>ssh -N {alias}</code>, занят/изменён локальный порт, или неверный User/ключ
+          для <em>целевого</em> хоста (не для jump).
+        </div>
+      </section>
+
+      <section id="windows">
+        <h2>Windows</h2>
+        <p class="lead">Подойдёт встроенный OpenSSH (Windows 10/11) или клиент вроде PuTTY/Bitvise.</p>
+        <h3>OpenSSH (рекомендуется)</h3>
+        <pre>{windows_key_steps}</pre>
+        <h3>Путь к config</h3>
+        <p class="muted">Обычно: <code>C:\\Users\\&lt;User&gt;\\.ssh\\config</code></p>
+      </section>
+
+      <section id="macos-linux">
+        <h2>macOS / Linux</h2>
+        <pre>{unix_key_steps}</pre>
+        <div class="callout">
+          Первый раз SSH спросит fingerprint хоста <code>{hostname}</code> — сравните с тем, что дал администратор, затем введите <code>yes</code>.
+        </div>
+      </section>
+
+      <section id="troubleshooting">
+        <h2>Типичные проблемы</h2>
+        <h3>«This account is currently not available» / PTY allocation failed</h3>
+        <p class="muted">Запустили без <code>-N</code>. Нужно: <code>ssh -N {alias}</code>.</p>
+        <h3>«Permission denied (publickey)»</h3>
+        <p class="muted">
+          Неверный ключ, путь в <code>IdentityFile</code>, или права на файл не 600.
+          {" В режиме своего ключа проверьте, что на сервере добавлен именно парный .pub к вашему приватному файлу." if not has_key else ""}
+          Добавьте <code>-v</code> для диагностики.
+        </p>
+        <h3>«bind: Address already in use»</h3>
+        <p class="muted">Локальный порт занят. Смените левый порт в <code>LocalForward</code>.</p>
+        <h3>«channel … administratively prohibited»</h3>
+        <p class="muted">Проброс на хост/порт, которого нет в разрешённых destinations. Обратитесь к администратору Linux Admin.</p>
+        <h3>Туннель сразу закрывается</h3>
+        <p class="muted">Проверьте сеть/VPN до <code>{hostname}:{port}</code>, время на ПК, и что ключ соответствует пользователю <code>{username}</code>.</p>
+        <h3>VS Code / Cursor: «Could not establish connection» / nologin</h3>
+        <p class="muted">
+          IDE подключили к jump-пользователю <code>{username}</code> или туннель не запущен.
+          Нужно: (1) <code>ssh -N {alias}</code>, (2) Remote-SSH на <code>127.0.0.1:{first_lp}</code>
+          под логином целевого сервера — см. <a href="#ide">раздел IDE</a>.
+        </p>
+      </section>
+
+      <section id="security">
+        <h2>Безопасность</h2>
+        <ul>
+          <li>Приватный ключ — как пароль. Не публикуйте его в Telegram/почте без шифрования.</li>
+          <li>Не копируйте ключ на чужие компьютеры.</li>
+          <li>При компрометации — сразу сообщите администратору: ключ отзовут и выдадут новый.</li>
+          <li>Туннель даёт доступ только к явно разрешённым <code>host:port</code>, не ко всей сети.</li>
+          <li>Закрывайте сессию <code>ssh -N</code>, когда работа закончена (Ctrl+C).</li>
+        </ul>
+        <div class="callout danger">
+          Если ключ мог попасть к посторонним — считайте его скомпрометированным и запросите перевыпуск.
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <p class="footer">
+    Generated by Linux Admin · user <span class="mono">{username}</span> ·
+    <a href="#toc">к содержанию</a> · <a href="#overview">наверх</a>
+  </p>
+</div>
+</body>
+</html>
+"""
+
+
+def build_readme_txt(pack: dict[str, Any]) -> str:
+    username = str(pack.get("username") or "")
+    alias = str(pack.get("host_alias") or f"tunnel-{username}")
+    identity = str(pack.get("identity_file") or f"~/.ssh/{username}_rsa4096")
+    key_name = str(pack.get("private_key_filename") or _identity_basename(identity, username))
+    has_key = bool(pack.get("has_private_key"))
+    lines = [
+        f"SSH Tunnel pack — {username}",
+        "",
+        "1) Open instructions.html in a browser (full guide).",
+    ]
+    if has_key:
+        lines.append(f"2) Save private key from ZIP as {identity} (chmod 600). File: {key_name}")
+    else:
+        lines.append(
+            "2) Private key is NOT in this ZIP (BYOK — you sent only the public key). "
+            f"Point IdentityFile to your existing key (default in config: {identity})."
+        )
+    lines.extend(
+        [
+            "3) Append ssh_config to ~/.ssh/config",
+            f"4) Start tunnel: ssh -N {alias}",
+            "5) Use services via localhost:<LocalForward port>",
+            "",
+        ]
+    )
+    for fw in pack.get("forwards") or []:
+        label = f" ({fw.get('label')})" if fw.get("label") else ""
+        lines.append(f"   localhost:{fw.get('local_port')} -> {fw.get('host')}:{fw.get('port')}{label}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_client_pack(
+    username: str,
+    *,
+    options: dict[str, Any] | None = None,
+    local_forwards: list[dict[str, Any]] | None = None,
+    local_port_mode: str = "random",
+    identity_file: str | None = None,
+    host_alias: str | None = None,
+    private_key: str | None = None,
+    private_key_filename: str | None = None,
+) -> dict[str, Any]:
+    """Build a ZIP: instructions.html + ssh_config + optional private key (BYOK if omitted)."""
+    key_text = (private_key or "").strip()
+    has_key = bool(key_text) and _looks_like_private_key(key_text)
+    if key_text and not has_key:
+        return {"ok": False, "error": "private_key does not look like a PEM private key"}
+
+    # Resolve IdentityFile before generating config:
+    # - with key in pack → ~/.ssh/<filename>
+    # - BYOK (user pubkey only) → ~/.ssh/id_ed25519 unless admin overrides
+    explicit_identity = (identity_file or "").strip() or None
+    if explicit_identity:
+        resolved_identity = explicit_identity
+        key_filename = _identity_basename(private_key_filename or resolved_identity, username)
+    elif has_key:
+        key_filename = _identity_basename(
+            private_key_filename or f"{username}_rsa4096", username
+        )
+        resolved_identity = f"~/.ssh/{key_filename}"
+    else:
+        key_filename = "id_ed25519"
+        resolved_identity = "~/.ssh/id_ed25519"
+
+    cfg = build_ssh_config(
+        username,
+        options=options,
+        local_forwards=local_forwards,
+        local_port_mode=local_port_mode,
+        identity_file=resolved_identity,
+        host_alias=host_alias,
+    )
+    if not cfg.get("ok"):
+        return cfg
+
+    pack_meta = {
+        **cfg,
+        "has_private_key": has_key,
+        "private_key_filename": key_filename,
+        "identity_file": resolved_identity,
+        "key_mode": "included" if has_key else "user_owned",
+    }
+    instructions = build_instructions_html(pack_meta)
+    readme = build_readme_txt(pack_meta)
+
+    folder = f"ssh-tunnel-{username}"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{folder}/instructions.html", instructions)
+        zf.writestr(f"{folder}/ssh_config", str(cfg.get("config") or ""))
+        zf.writestr(f"{folder}/README.txt", readme)
+        if has_key:
+            info = zipfile.ZipInfo(f"{folder}/{key_filename}")
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o600 << 16
+            zf.writestr(info, key_text if key_text.endswith("\n") else key_text + "\n")
+
+    data = buf.getvalue()
+    return {
+        "ok": True,
+        "filename": f"{folder}.zip",
+        "content_type": "application/zip",
+        "bytes": data,
+        "size": len(data),
+        "has_private_key": has_key,
+        "key_mode": "included" if has_key else "user_owned",
+        "identity_file": resolved_identity,
+        "host_alias": cfg.get("host_alias"),
+        "forwards": cfg.get("forwards"),
+        "username": username,
     }
 
 
@@ -1188,7 +2047,184 @@ def _resolve_sshd_session(pid: int) -> dict[str, Any] | None:
     return best
 
 
-def _collect_forwards(session_pid: int, client_ip: str | None, public_port: int) -> list[dict[str, Any]]:
+def _sshd_listen_ports(configured: int | None = None) -> set[int]:
+    """Local ports where sshd is listening (public_port may be external NAT)."""
+    ports: set[int] = set()
+    if configured is not None and 1 <= int(configured) <= 65535:
+        ports.add(int(configured))
+    try:
+        for c in psutil.net_connections(kind="inet"):
+            if c.status != psutil.CONN_LISTEN:
+                continue
+            if not c.laddr or not c.pid:
+                continue
+            try:
+                proc = psutil.Process(int(c.pid))
+                name = (proc.name() or "").lower()
+                cmdline = " ".join(proc.cmdline() or []).lower()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+            if "sshd" in name or "/sshd" in cmdline or "sshd " in cmdline:
+                port = getattr(c.laddr, "port", None)
+                if port is not None:
+                    ports.add(int(port))
+    except (psutil.AccessDenied, PermissionError):
+        pass
+    if not ports:
+        ports.add(22)
+    return ports
+
+
+def _parse_ss_peer(token: str) -> tuple[str | None, int | None]:
+    token = (token or "").strip()
+    if not token or token == "*:*":
+        return None, None
+    if token.startswith("["):
+        # [ipv6]:port
+        end = token.rfind("]")
+        if end < 0:
+            return None, None
+        ip = token[1:end]
+        rest = token[end + 1 :]
+        if not rest.startswith(":"):
+            return ip, None
+        try:
+            return ip, int(rest[1:])
+        except ValueError:
+            return ip, None
+    # host:port — split from the right (IPv4 / hostname)
+    if ":" not in token:
+        return token, None
+    host, _, port_s = token.rpartition(":")
+    if not host:
+        return None, None
+    try:
+        return host, int(port_s)
+    except ValueError:
+        return host, None
+
+
+def _collect_ss_tcp_bytes() -> dict[tuple[str, int], tuple[int, int]]:
+    """
+    Map (remote_ip, remote_port) -> (bytes_sent, bytes_recv) via `ss -Hti`.
+    bytes_sent/recv are from the server side of the TCP session (tunnel client link).
+    """
+    ss = shutil.which("ss")
+    if not ss:
+        return {}
+    try:
+        out = subprocess.check_output(
+            [ss, "-Hti"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return {}
+
+    result: dict[tuple[str, int], tuple[int, int]] = {}
+    lines = out.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        if not line or line[:1].isspace():
+            continue
+        parts = line.split()
+        # State Recv-Q Send-Q Local Peer [Process…]
+        if len(parts) < 5:
+            continue
+        peer_ip, peer_port = _parse_ss_peer(parts[4])
+        if not peer_ip or peer_port is None:
+            continue
+        detail = ""
+        if i < len(lines) and lines[i][:1].isspace():
+            detail = lines[i]
+            i += 1
+        ms = SS_BYTES_SENT_RE.search(detail)
+        mr = SS_BYTES_RECV_RE.search(detail)
+        if not ms or not mr:
+            continue
+        result[(peer_ip, int(peer_port))] = (int(ms.group(1)), int(mr.group(1)))
+    return result
+
+
+def _process_io_chars(session_pid: int) -> tuple[int | None, int | None]:
+    """Fallback: cumulative read_chars/write_chars over session process tree + priv parent."""
+    try:
+        root = psutil.Process(session_pid)
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return None, None
+    procs = [root]
+    try:
+        procs.extend(root.children(recursive=True))
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+    try:
+        parent = psutil.Process(root.ppid())
+        pname = " ".join(parent.cmdline() or [])
+        if "sshd" in pname and "[priv]" in pname:
+            procs.append(parent)
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        pass
+
+    read_chars = 0
+    write_chars = 0
+    any_ok = False
+    for proc in procs:
+        try:
+            io = proc.io_counters()
+            # Linux: chars include socket traffic; bytes are block-device only.
+            rc = getattr(io, "read_chars", None)
+            wc = getattr(io, "write_chars", None)
+            if rc is None or wc is None:
+                continue
+            read_chars += int(rc)
+            write_chars += int(wc)
+            any_ok = True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, AttributeError):
+            continue
+    if not any_ok:
+        return None, None
+    # write_chars ≈ bytes sent by process; read_chars ≈ bytes received
+    return write_chars, read_chars
+
+
+def _with_io_rates(
+    session_key: str,
+    bytes_sent: int | None,
+    bytes_recv: int | None,
+) -> tuple[float | None, float | None]:
+    now = time.monotonic()
+    sent_rate: float | None = None
+    recv_rate: float | None = None
+    prev = _IO_RATE_CACHE.get(session_key)
+    if (
+        prev
+        and bytes_sent is not None
+        and bytes_recv is not None
+        and bytes_sent >= prev[1]
+        and bytes_recv >= prev[2]
+    ):
+        dt = now - prev[0]
+        if dt >= 0.5:
+            sent_rate = (bytes_sent - prev[1]) / dt
+            recv_rate = (bytes_recv - prev[2]) / dt
+    if bytes_sent is not None and bytes_recv is not None:
+        _IO_RATE_CACHE[session_key] = (now, bytes_sent, bytes_recv)
+    # Drop stale cache entries for closed sessions (best-effort)
+    if len(_IO_RATE_CACHE) > 500:
+        stale = [k for k, v in _IO_RATE_CACHE.items() if now - v[0] > 3600]
+        for k in stale:
+            _IO_RATE_CACHE.pop(k, None)
+    return sent_rate, recv_rate
+
+
+def _collect_forwards(
+    session_pid: int,
+    client_ip: str | None,
+    listen_ports: set[int],
+) -> list[dict[str, Any]]:
     """Outbound ESTABLISHED from session process tree (= active LocalForwards)."""
     try:
         root = psutil.Process(session_pid)
@@ -1214,10 +2250,10 @@ def _collect_forwards(session_pid: int, client_ip: str | None, public_port: int)
         rport = getattr(c.raddr, "port", None)
         lip = getattr(c.laddr, "ip", None) if c.laddr else None
         lport = getattr(c.laddr, "port", None) if c.laddr else None
-        # Skip the inbound SSH client link
-        if client_ip and rip == client_ip and lport == public_port:
+        # Skip the inbound SSH client link (local sshd listen port, or back to client IP)
+        if lport is not None and int(lport) in listen_ports:
             continue
-        if lport == public_port:
+        if client_ip and rip == client_ip:
             continue
         key = f"{rip}:{rport}"
         if key in seen:
@@ -1238,9 +2274,14 @@ def _collect_forwards(session_pid: int, client_ip: str | None, public_port: int)
 def collect_active_sessions(options: dict[str, Any] | None = None) -> dict[str, Any]:
     """
     Live SSH tunnel sessions via psutil (TTY-less -N tunnels appear here, not in who/w).
+
+    Matches connections on the local sshd listen port(s), not public_port — the latter
+    may be an external NAT/firewall port that never appears in local sockets.
     """
     opts = _opts(options)
     public_port = int(opts["public_port"])
+    listen_port = int(opts["listen_port"])
+    listen_ports = _sshd_listen_ports(listen_port)
     allowed = _tunnel_usernames(options)
     prefix = opts["username_prefix"] or "tun-"
 
@@ -1253,15 +2294,20 @@ def collect_active_sessions(options: dict[str, Any] | None = None) -> dict[str, 
             "active_count": 0,
             "sessions": [],
             "public_port": public_port,
+            "listen_port": listen_port,
+            "listen_ports": sorted(listen_ports),
         }
 
+    ss_bytes = _collect_ss_tcp_bytes()
+    now_ts = time.time()
     sessions: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
 
     for c in conns:
         if c.status != psutil.CONN_ESTABLISHED:
             continue
-        if not c.laddr or getattr(c.laddr, "port", None) != public_port:
+        lport = getattr(c.laddr, "port", None) if c.laddr else None
+        if lport is None or int(lport) not in listen_ports:
             continue
         if not c.pid:
             continue
@@ -1283,10 +2329,27 @@ def collect_active_sessions(options: dict[str, Any] | None = None) -> dict[str, 
 
         started = resolved.get("started_at")
         started_iso = None
+        duration_seconds = None
         if isinstance(started, (int, float)) and started > 0:
             started_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started))
+            duration_seconds = max(0, int(now_ts - float(started)))
 
-        forwards = _collect_forwards(int(resolved["pid"]), remote_ip, public_port)
+        bytes_sent: int | None = None
+        bytes_recv: int | None = None
+        bytes_source = None
+        if remote_ip and remote_port is not None:
+            pair = ss_bytes.get((remote_ip, int(remote_port)))
+            if pair:
+                bytes_sent, bytes_recv = pair
+                bytes_source = "ss"
+        if bytes_sent is None:
+            bytes_sent, bytes_recv = _process_io_chars(int(resolved["pid"]))
+            if bytes_sent is not None:
+                bytes_source = "proc_io"
+
+        sent_rate, recv_rate = _with_io_rates(session_key, bytes_sent, bytes_recv)
+
+        forwards = _collect_forwards(int(resolved["pid"]), remote_ip, listen_ports)
         sessions.append(
             {
                 "session_key": session_key,
@@ -1296,21 +2359,47 @@ def collect_active_sessions(options: dict[str, Any] | None = None) -> dict[str, 
                 "remote_ip": remote_ip,
                 "remote_port": remote_port,
                 "remote": _fmt_peer(remote_ip, remote_port),
-                "local_port": public_port,
+                "local_port": int(lport),
                 "started_at": started_iso,
                 "started_ts": started,
+                "duration_seconds": duration_seconds,
                 "cmdline": resolved.get("cmdline"),
                 "forwards": forwards,
                 "forwards_count": len(forwards),
+                "bytes_sent": bytes_sent,
+                "bytes_recv": bytes_recv,
+                "bytes_sent_rate": sent_rate,
+                "bytes_recv_rate": recv_rate,
+                "bytes_source": bytes_source,
             }
         )
 
+    # Prune rate cache for sessions that are gone
+    live = {s["session_key"] for s in sessions}
+    for key in list(_IO_RATE_CACHE.keys()):
+        if key not in live:
+            _IO_RATE_CACHE.pop(key, None)
+
     sessions.sort(key=lambda s: (s.get("username") or "", s.get("remote_ip") or "", s.get("pid") or 0))
+    bytes_sent_total = sum(int(s["bytes_sent"]) for s in sessions if s.get("bytes_sent") is not None)
+    bytes_recv_total = sum(int(s["bytes_recv"]) for s in sessions if s.get("bytes_recv") is not None)
+    bytes_sent_rate_total = sum(
+        float(s["bytes_sent_rate"]) for s in sessions if s.get("bytes_sent_rate") is not None
+    )
+    bytes_recv_rate_total = sum(
+        float(s["bytes_recv_rate"]) for s in sessions if s.get("bytes_recv_rate") is not None
+    )
     return {
         "available": True,
         "error": None,
         "active_count": len(sessions),
         "sessions": sessions,
         "public_port": public_port,
+        "listen_port": listen_port,
+        "listen_ports": sorted(listen_ports),
         "usernames": sorted({s["username"] for s in sessions}),
+        "bytes_sent_total": bytes_sent_total,
+        "bytes_recv_total": bytes_recv_total,
+        "bytes_sent_rate_total": bytes_sent_rate_total,
+        "bytes_recv_rate_total": bytes_recv_rate_total,
     }

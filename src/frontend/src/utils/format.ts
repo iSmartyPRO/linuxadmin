@@ -77,6 +77,22 @@ export function formatUptime(seconds?: number | null): string {
   return parts.join(' ')
 }
 
+/** Human duration for sessions: `45 s`, `12 m 3 s`, `2 h 15 m`, `1d 3h`. */
+export function formatDuration(sec?: number | null): string {
+  if (sec == null || !Number.isFinite(sec)) return '—'
+  const s = Math.max(0, Math.floor(sec))
+  if (s < 60) return `${s} s`
+  if (s < 3600) return `${Math.floor(s / 60)} m ${s % 60} s`
+  if (s < 86400) {
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s % 3600) / 60)
+    return `${h} h ${m} m`
+  }
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  return `${d}d ${h}h`
+}
+
 export function pctColor(pct?: number | null): string {
   if (pct == null) return '#94a3b8'
   if (pct >= 90) return '#e11d48'

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Alert,
   Button,
@@ -24,11 +25,13 @@ import {
   DownloadOutlined,
   SafetyCertificateOutlined,
   ApiOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons'
-import { api } from '../api/client'
+import { api, apiDownload } from '../api/client'
 import { useAccess } from '../api/access'
 import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
+import { formatBytes, formatDuration, formatRate } from '../utils/format'
 import { tablePagination } from '../utils/tablePagination'
 
 type Destination = { host: string; port: number; label?: string }
@@ -77,9 +80,33 @@ type TunnelSession = {
   remote?: string
   local_port?: number
   started_at?: string
+  duration_seconds?: number
   cmdline?: string
   forwards?: Array<{ host?: string; port?: number; peer?: string }>
   forwards_count?: number
+  bytes_sent?: number | null
+  bytes_recv?: number | null
+  bytes_sent_rate?: number | null
+  bytes_recv_rate?: number | null
+}
+
+type ConnHistoryRow = {
+  id: number
+  session_key: string
+  username: string
+  remote_ip?: string
+  remote_port?: number
+  remote?: string
+  pid?: number
+  status: string
+  started_at: string
+  ended_at?: string | null
+  duration_seconds?: number | null
+  forwards_count?: number
+  bytes_sent?: number | null
+  bytes_recv?: number | null
+  bytes_sent_rate?: number | null
+  bytes_recv_rate?: number | null
 }
 
 type UserDetail = {
@@ -114,11 +141,26 @@ export function SshTunnelPage() {
     suggested_filename?: string
     comment?: string
   } | null>(null)
-  const [configModal, setConfigModal] = useState<{ config: string; usage: string[] } | null>(
-    null,
-  )
+  /** Kept in memory after keygen so ZIP pack can include the private key. */
+  const [sessionPrivateKey, setSessionPrivateKey] = useState<{
+    username: string
+    private_key: string
+    filename: string
+  } | null>(null)
+  const [configModal, setConfigModal] = useState<{
+    config: string
+    usage: string[]
+    local_forwards: Array<{ host: string; port: number; label?: string; local_port: number }>
+    local_port_mode: string
+  } | null>(null)
+  const [packBusy, setPackBusy] = useState(false)
   const [configBuilderOpen, setConfigBuilderOpen] = useState(false)
+  const [historyRows, setHistoryRows] = useState<ConnHistoryRow[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
   const [configMode, setConfigMode] = useState<'random' | 'same' | 'custom'>('random')
+  /** user_owned = only pubkey was added (BYOK); include_session = pack private key if available */
+  const [packKeyMode, setPackKeyMode] = useState<'user_owned' | 'include_session'>('user_owned')
+  const [packIdentityFile, setPackIdentityFile] = useState('~/.ssh/id_ed25519')
   const [forwardRows, setForwardRows] = useState<
     Array<{ host: string; port: number; label?: string; local_port: number }>
   >([])
@@ -136,6 +178,13 @@ export function SshTunnelPage() {
     }))
     setForwardRows(rows)
     setConfigMode('random')
+    const hasSessionKey = sessionPrivateKey?.username === detail.username
+    setPackKeyMode(hasSessionKey ? 'include_session' : 'user_owned')
+    setPackIdentityFile(
+      hasSessionKey
+        ? `~/.ssh/${sessionPrivateKey!.filename}`
+        : '~/.ssh/id_ed25519',
+    )
     setConfigBuilderOpen(true)
   }
 
@@ -154,6 +203,16 @@ export function SshTunnelPage() {
   const generateConfig = async () => {
     if (!detail) return
     try {
+      const local_forwards = forwardRows.map((r) => ({
+        host: r.host,
+        port: r.port,
+        label: r.label || '',
+        local_port: r.local_port,
+      }))
+      const identity =
+        packKeyMode === 'include_session' && sessionPrivateKey?.username === detail.username
+          ? `~/.ssh/${sessionPrivateKey.filename}`
+          : packIdentityFile.trim() || '~/.ssh/id_ed25519'
       const res = await api<{
         ok: boolean
         config?: string
@@ -163,12 +222,8 @@ export function SshTunnelPage() {
         method: 'POST',
         body: JSON.stringify({
           local_port_mode: configMode,
-          local_forwards: forwardRows.map((r) => ({
-            host: r.host,
-            port: r.port,
-            label: r.label || '',
-            local_port: r.local_port,
-          })),
+          local_forwards,
+          identity_file: identity,
         }),
       })
       if (!res.ok || !res.config) {
@@ -176,17 +231,108 @@ export function SshTunnelPage() {
         return
       }
       setConfigBuilderOpen(false)
-      setConfigModal({ config: res.config, usage: res.usage || [] })
+      setConfigModal({
+        config: res.config,
+        usage: res.usage || [],
+        local_forwards,
+        local_port_mode: configMode,
+      })
     } catch (e) {
       message.error(String(e))
     }
   }
 
+  const downloadClientPack = async (opts?: {
+    local_forwards?: Array<{ host: string; port: number; label?: string; local_port: number }>
+    local_port_mode?: string
+    private_key?: string
+    private_key_filename?: string
+    /** Force BYOK even if session key exists */
+    user_owned?: boolean
+    identity_file?: string
+  }) => {
+    if (!detail) return
+    const forwards =
+      opts?.local_forwards ||
+      configModal?.local_forwards ||
+      (detail.destinations || []).map((d) => ({
+        host: d.host,
+        port: d.port,
+        label: d.label || '',
+        local_port: 20000 + Math.floor(Math.random() * 30000),
+      }))
+    const mode = opts?.local_port_mode || configModal?.local_port_mode || 'random'
+    const keyFromSession =
+      sessionPrivateKey?.username === detail.username ? sessionPrivateKey : null
+    const wantKey =
+      opts?.private_key ||
+      (opts?.user_owned
+        ? undefined
+        : packKeyMode === 'include_session'
+          ? keyFromSession?.private_key
+          : undefined)
+    const private_key = opts?.private_key || wantKey
+    const private_key_filename =
+      opts?.private_key_filename ||
+      (private_key ? keyFromSession?.filename : undefined) ||
+      undefined
+    const identity_file =
+      opts?.identity_file ||
+      (private_key && keyFromSession
+        ? `~/.ssh/${keyFromSession.filename}`
+        : packIdentityFile.trim() || '~/.ssh/id_ed25519')
+
+    setPackBusy(true)
+    try {
+      const { blob, filename } = await apiDownload(
+        `/api/ssh-tunnel/users/${encodeURIComponent(detail.username)}/client-pack`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            local_port_mode: mode,
+            local_forwards: forwards,
+            identity_file,
+            private_key: private_key || undefined,
+            private_key_filename: private_key_filename || undefined,
+          }),
+        },
+      )
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename || `ssh-tunnel-${detail.username}.zip`
+      a.click()
+      URL.revokeObjectURL(url)
+      message.success(
+        private_key
+          ? 'ZIP downloaded (config + private key + instructions.html)'
+          : 'ZIP downloaded (BYOK: config + instructions, without private key)',
+      )
+    } catch (e) {
+      message.error(String(e))
+    } finally {
+      setPackBusy(false)
+    }
+  }
+
+  const loadHistory = useCallback(() => {
+    const to = new Date()
+    const from = new Date(to.getTime() - 24 * 3600 * 1000)
+    setHistoryLoading(true)
+    void api<ConnHistoryRow[]>(
+      `/api/history/ssh-tunnel/connections?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&limit=50`,
+    )
+      .then(setHistoryRows)
+      .catch(() => setHistoryRows([]))
+      .finally(() => setHistoryLoading(false))
+  }, [])
+
   const load = useCallback(() => {
     void api<Overview>('/api/ssh-tunnel')
       .then(setData)
       .catch((e) => setError(String(e)))
-  }, [])
+    loadHistory()
+  }, [loadHistory])
 
   useEffect(() => {
     load()
@@ -375,9 +521,14 @@ export function SshTunnelPage() {
         title={`Active SSH connections (${data.active_sessions || 0})`}
         style={{ marginTop: 16 }}
         extra={
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            auto-refresh 10s · history in the “History” section
-          </Typography.Text>
+          <Space size={12}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              auto-refresh 10s
+            </Typography.Text>
+            <Link to="/history" style={{ fontSize: 12 }}>
+              <HistoryOutlined /> Full history
+            </Link>
+          </Space>
         }
       >
         {data.sessions_error ? (
@@ -385,7 +536,7 @@ export function SshTunnelPage() {
         ) : null}
         <Table
           size="small"
-          rowKey={(r) => r.session_key || `${r.username}-${r.pid}`}
+          rowKey={(r) => r?.session_key || `${r?.username}-${r?.pid}`}
           dataSource={data.sessions || []}
           pagination={tablePagination(10)}
           locale={{ emptyText: 'No active tunnel sessions' }}
@@ -398,8 +549,39 @@ export function SshTunnelPage() {
             {
               title: 'Client',
               dataIndex: 'remote',
-              render: (_: unknown, r: TunnelSession) => (
-                <span className="mono">{r.remote || r.remote_ip || '—'}</span>
+              render: (_: unknown, r?: TunnelSession) => (
+                <span className="mono">{r?.remote || r?.remote_ip || '—'}</span>
+              ),
+            },
+            {
+              title: 'Duration',
+              dataIndex: 'duration_seconds',
+              width: 110,
+              render: (v?: number, r?: TunnelSession) => {
+                if (v != null) return <span className="mono">{formatDuration(v)}</span>
+                if (r?.started_at) {
+                  const sec = Math.max(
+                    0,
+                    Math.floor((Date.now() - new Date(r.started_at).getTime()) / 1000),
+                  )
+                  return <span className="mono">{formatDuration(sec)}</span>
+                }
+                return '—'
+              },
+            },
+            {
+              title: 'Network',
+              key: 'network',
+              width: 200,
+              render: (_: unknown, r?: TunnelSession) => (
+                <div className="mono" style={{ fontSize: 12, lineHeight: 1.45 }}>
+                  <div>
+                    ↓ {formatRate(r?.bytes_recv_rate)} · {formatBytes(r?.bytes_recv)}
+                  </div>
+                  <div>
+                    ↑ {formatRate(r?.bytes_sent_rate)} · {formatBytes(r?.bytes_sent)}
+                  </div>
+                </div>
               ),
             },
             {
@@ -436,6 +618,106 @@ export function SshTunnelPage() {
                 ) : (
                   <Typography.Text type="secondary">—</Typography.Text>
                 ),
+            },
+          ]}
+        />
+      </Panel>
+
+      <Panel
+        title="Recent connections (24h)"
+        style={{ marginTop: 16 }}
+        extra={
+          <Space size={12}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {historyLoading ? 'loading…' : `${historyRows.length} record(s)`}
+            </Typography.Text>
+            <Link to="/history" style={{ fontSize: 12 }}>
+              Open History →
+            </Link>
+          </Space>
+        }
+      >
+        <Table
+          size="small"
+          rowKey="id"
+          loading={historyLoading}
+          dataSource={historyRows}
+          pagination={tablePagination(10)}
+          locale={{ emptyText: 'No connection history yet — enable “Write connection history” in Settings' }}
+          columns={[
+            {
+              title: 'Status',
+              dataIndex: 'status',
+              width: 90,
+              render: (v: string) => (
+                <Tag color={v === 'active' ? 'success' : 'default'}>{v}</Tag>
+              ),
+            },
+            {
+              title: 'User',
+              dataIndex: 'username',
+              render: (v: string) => <span className="mono">{v}</span>,
+            },
+            {
+              title: 'Client',
+              dataIndex: 'remote',
+              render: (_: unknown, r?: ConnHistoryRow) => (
+                <span className="mono">{r?.remote || r?.remote_ip || '—'}</span>
+              ),
+            },
+            {
+              title: 'Start',
+              dataIndex: 'started_at',
+              width: 160,
+              render: (v: string) => (
+                <span className="mono" style={{ fontSize: 12 }}>
+                  {new Date(v).toLocaleString()}
+                </span>
+              ),
+            },
+            {
+              title: 'End',
+              dataIndex: 'ended_at',
+              width: 160,
+              render: (v?: string | null) =>
+                v ? (
+                  <span className="mono" style={{ fontSize: 12 }}>
+                    {new Date(v).toLocaleString()}
+                  </span>
+                ) : (
+                  '—'
+                ),
+            },
+            {
+              title: 'Duration',
+              dataIndex: 'duration_seconds',
+              width: 110,
+              render: (v: number | null | undefined, r?: ConnHistoryRow) => {
+                if (r?.status === 'active' && r.started_at) {
+                  const sec = Math.max(
+                    0,
+                    Math.floor((Date.now() - new Date(r.started_at).getTime()) / 1000),
+                  )
+                  return <span className="mono">{formatDuration(sec)}</span>
+                }
+                return <span className="mono">{formatDuration(v)}</span>
+              },
+            },
+            {
+              title: 'Traffic',
+              key: 'traffic',
+              width: 150,
+              render: (_: unknown, r?: ConnHistoryRow) => (
+                <span className="mono" style={{ fontSize: 12 }}>
+                  ↓ {formatBytes(r?.bytes_recv)} · ↑ {formatBytes(r?.bytes_sent)}
+                </span>
+              ),
+            },
+            {
+              title: 'Fwd',
+              dataIndex: 'forwards_count',
+              width: 60,
+              render: (v?: number) => v ?? 0,
             },
           ]}
         />
@@ -840,6 +1122,49 @@ export function SshTunnelPage() {
               ]}
             />
           </Form.Item>
+          <Form.Item
+            label="Private key in ZIP"
+            extra="If the user sent only a public key, choose «User’s own key» — private key stays with them."
+          >
+            <Select
+              value={packKeyMode}
+              onChange={(v: 'user_owned' | 'include_session') => {
+                setPackKeyMode(v)
+                if (v === 'user_owned') {
+                  setPackIdentityFile('~/.ssh/id_ed25519')
+                } else if (
+                  sessionPrivateKey &&
+                  sessionPrivateKey.username === detail?.username
+                ) {
+                  setPackIdentityFile(`~/.ssh/${sessionPrivateKey.filename}`)
+                }
+              }}
+              options={[
+                {
+                  value: 'user_owned',
+                  label: 'User’s own key (BYOK — pubkey only, no private key in ZIP)',
+                },
+                {
+                  value: 'include_session',
+                  label: sessionPrivateKey?.username === detail?.username
+                    ? 'Include private key generated in this session'
+                    : 'Include private key (generate keypair first)',
+                  disabled: sessionPrivateKey?.username !== detail?.username,
+                },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item
+            label="IdentityFile (path on client PC)"
+            extra="Written into ssh_config. For BYOK point to the user’s existing private key."
+          >
+            <Input
+              className="mono"
+              value={packIdentityFile}
+              onChange={(e) => setPackIdentityFile(e.target.value)}
+              placeholder="~/.ssh/id_ed25519"
+            />
+          </Form.Item>
         </Form>
         {!forwardRows.length ? (
           <Alert type="warning" showIcon message="Add destinations first" />
@@ -974,6 +1299,12 @@ export function SshTunnelPage() {
                 suggested_filename: res.suggested_filename,
                 comment: res.comment,
               })
+              setSessionPrivateKey({
+                username: detail.username,
+                private_key: res.private_key,
+                filename:
+                  res.suggested_filename || `${detail.username}_rsa4096`,
+              })
               void refreshDetail()
             }
           })
@@ -1037,15 +1368,38 @@ export function SshTunnelPage() {
               )
             }
           >
-            Download
+            Download key
           </Button>,
-          <Button key="ok" type="primary" onClick={() => setPrivateKeyModal(null)}>
+          <Button
+            key="zip"
+            type="primary"
+            icon={<DownloadOutlined />}
+            loading={packBusy}
+            onClick={() =>
+              privateKeyModal &&
+              void downloadClientPack({
+                private_key: privateKeyModal.private_key,
+                private_key_filename:
+                  privateKeyModal.suggested_filename ||
+                  `${detail?.username || 'tunnel'}_rsa4096`,
+              })
+            }
+          >
+            Download ZIP pack
+          </Button>,
+          <Button key="ok" onClick={() => setPrivateKeyModal(null)}>
             Close
           </Button>,
         ]}
       >
         {privateKeyModal ? (
           <>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="ZIP pack includes private key, ssh_config, and premium instructions.html for the user."
+            />
             <Typography.Paragraph type="secondary">
               RSA 4096 · Fingerprint:{' '}
               <span className="mono">{privateKeyModal.fingerprint}</span>
@@ -1089,13 +1443,33 @@ export function SshTunnelPage() {
           >
             Download
           </Button>,
-          <Button key="ok" type="primary" onClick={() => setConfigModal(null)}>
+          <Button
+            key="zip"
+            type="primary"
+            icon={<DownloadOutlined />}
+            loading={packBusy}
+            onClick={() => void downloadClientPack()}
+          >
+            Download ZIP pack
+          </Button>,
+          <Button key="ok" onClick={() => setConfigModal(null)}>
             Close
           </Button>,
         ]}
       >
         {configModal ? (
           <>
+            <Alert
+              type={packKeyMode === 'include_session' ? 'info' : 'success'}
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={
+                packKeyMode === 'include_session' &&
+                sessionPrivateKey?.username === detail?.username
+                  ? 'ZIP pack: instructions.html + ssh_config + private key from this session.'
+                  : 'ZIP pack (BYOK): instructions.html + ssh_config only. Private key is not included — user keeps the key that matches the added pubkey.'
+              }
+            />
             <ul style={{ paddingLeft: 18, color: 'var(--la-muted)' }}>
               {configModal.usage.map((u) => (
                 <li key={u}>{u}</li>

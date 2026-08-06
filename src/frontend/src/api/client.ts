@@ -66,6 +66,43 @@ export async function api<T = unknown>(
   return res.json() as Promise<T>
 }
 
+/** Authenticated binary download (ZIP, etc.). Returns blob + filename hint. */
+export async function apiDownload(
+  path: string,
+  options: RequestInit = {},
+): Promise<{ blob: Blob; filename: string | null }> {
+  const headers = new Headers(options.headers || {})
+  if (!headers.has('Content-Type') && options.body) {
+    headers.set('Content-Type', 'application/json')
+  }
+  const token = getToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  const res = await fetch(path, { ...options, headers })
+  if (res.status === 401) {
+    clearToken()
+    window.location.href = '/login'
+    throw new Error('Unauthorized')
+  }
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const j = await res.json()
+      detail = j?.detail || j?.error || detail
+    } catch {
+      try {
+        detail = (await res.text()) || detail
+      } catch {
+        /* ignore */
+      }
+    }
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+  const cd = res.headers.get('Content-Disposition') || ''
+  const m = /filename="?([^"]+)"?/i.exec(cd)
+  return { blob: await res.blob(), filename: m?.[1] || null }
+}
+
 /** WebSocket URL without secrets in the query string. */
 export function wsUrl(path: string): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'

@@ -105,6 +105,7 @@ const DEFAULT_MODULES: ModulesConfig = {
     group: 'lnxadmin-tunnel',
     public_hostname: '',
     public_port: 22,
+    listen_port: 22,
     show_sessions: true,
     record_history: true,
     history_interval_seconds: 15,

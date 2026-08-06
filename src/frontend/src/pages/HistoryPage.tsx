@@ -8,7 +8,7 @@ import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
 import { PremiumAreaChart, type SeriesDef } from '../components/PremiumAreaChart'
 import { useAppSettings } from '../api/settings'
-import { formatNetworkRate, formatRateTick } from '../utils/format'
+import { formatBytes, formatDuration, formatNetworkRate, formatRate, formatRateTick } from '../utils/format'
 import { tablePagination } from '../utils/tablePagination'
 
 const { RangePicker } = DatePicker
@@ -30,6 +30,10 @@ type SshSnapshotRow = {
   recorded_at: string
   active_count: number
   users_connected: number
+  bytes_sent_total?: number | null
+  bytes_recv_total?: number | null
+  bytes_sent_rate_total?: number | null
+  bytes_recv_rate_total?: number | null
 }
 
 type SshConnRow = {
@@ -46,6 +50,10 @@ type SshConnRow = {
   duration_seconds?: number | null
   forwards_count?: number
   forwards?: Array<{ peer?: string; host?: string; port?: number }>
+  bytes_sent?: number | null
+  bytes_recv?: number | null
+  bytes_sent_rate?: number | null
+  bytes_recv_rate?: number | null
 }
 
 type MetricDef = {
@@ -76,16 +84,6 @@ const PRESETS: Array<{ label: string; hours: number }> = [
   { label: '24h', hours: 24 },
   { label: '7d', hours: 24 * 7 },
 ]
-
-function formatDuration(sec?: number | null): string {
-  if (sec == null || !Number.isFinite(sec)) return '—'
-  const s = Math.max(0, Math.floor(sec))
-  if (s < 60) return `${s} s`
-  if (s < 3600) return `${Math.floor(s / 60)} m ${s % 60} s`
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  return `${h} h ${m} m`
-}
 
 function MetricChip({
   id,
@@ -438,6 +436,8 @@ function SshTunnelHistoryTab({ range }: { range: [Dayjs, Dayjs] }) {
         ts: dayjs(r.recorded_at).valueOf(),
         active_count: Number(r.active_count ?? 0),
         users_connected: Number(r.users_connected ?? 0),
+        bytes_recv_rate_total: Number(r.bytes_recv_rate_total ?? 0),
+        bytes_sent_rate_total: Number(r.bytes_sent_rate_total ?? 0),
       })),
     [snapshots],
   )
@@ -457,6 +457,25 @@ function SshTunnelHistoryTab({ range }: { range: [Dayjs, Dayjs] }) {
     },
   ]
 
+  const trafficSeries: SeriesDef[] = [
+    {
+      key: 'bytes_recv_rate_total',
+      label: 'Tunnel RX',
+      color: '#059669',
+      formatValue: (v) => formatNetworkRate(v),
+    },
+    {
+      key: 'bytes_sent_rate_total',
+      label: 'Tunnel TX',
+      color: '#ea580c',
+      formatValue: (v) => formatNetworkRate(v),
+    },
+  ]
+
+  const hasTraffic = chartData.some(
+    (r) => r.bytes_recv_rate_total > 0 || r.bytes_sent_rate_total > 0,
+  )
+
   return (
     <>
       <Panel
@@ -475,6 +494,26 @@ function SshTunnelHistoryTab({ range }: { range: [Dayjs, Dayjs] }) {
           </Typography.Text>
         )}
       </Panel>
+
+      {chartData.length && hasTraffic ? (
+        <Panel
+          title="Tunnel network load"
+          style={{ marginTop: 16 }}
+          extra={
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              aggregate RX/TX of active tunnel sessions
+            </Typography.Text>
+          }
+        >
+          <PremiumAreaChart
+            data={chartData}
+            series={trafficSeries}
+            height={240}
+            brush
+            yFormatter={formatRateTick}
+          />
+        </Panel>
+      ) : null}
 
       <Panel
         title="Connection log"
@@ -547,10 +586,35 @@ function SshTunnelHistoryTab({ range }: { range: [Dayjs, Dayjs] }) {
               dataIndex: 'duration_seconds',
               render: (v: number | null | undefined, r: SshConnRow) => {
                 if (r.status === 'active' && r.started_at) {
-                  return formatDuration(dayjs().diff(dayjs(r.started_at), 'second'))
+                  return (
+                    <span className="mono">
+                      {formatDuration(dayjs().diff(dayjs(r.started_at), 'second'))}
+                    </span>
+                  )
                 }
-                return formatDuration(v)
+                return <span className="mono">{formatDuration(v)}</span>
               },
+            },
+            {
+              title: 'Traffic',
+              key: 'traffic',
+              width: 170,
+              render: (_: unknown, r: SshConnRow) => (
+                <div className="mono" style={{ fontSize: 12, lineHeight: 1.45 }}>
+                  <div>
+                    ↓ {formatBytes(r.bytes_recv)}
+                    {r.status === 'active' && r.bytes_recv_rate != null
+                      ? ` · ${formatRate(r.bytes_recv_rate)}`
+                      : ''}
+                  </div>
+                  <div>
+                    ↑ {formatBytes(r.bytes_sent)}
+                    {r.status === 'active' && r.bytes_sent_rate != null
+                      ? ` · ${formatRate(r.bytes_sent_rate)}`
+                      : ''}
+                  </div>
+                </div>
+              ),
             },
             {
               title: 'Forwards',

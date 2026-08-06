@@ -480,7 +480,20 @@ function ModuleOptionsFields({
           <NumberRow label="History write interval (sec)" value={mod.history_interval_seconds ?? 15} min={5} max={3600} onChange={(v) => patch({ history_interval_seconds: v || 15 })} />
           <TextRow label="Username prefix" value={mod.username_prefix ?? 'tun-'} onChange={(v) => patch({ username_prefix: v })} />
           <TextRow label="Public hostname (for ssh config)" value={mod.public_hostname ?? ''} placeholder="auto FQDN" onChange={(v) => patch({ public_hostname: v })} />
-          <NumberRow label="SSH port" value={mod.public_port ?? 22} min={1} max={65535} onChange={(v) => patch({ public_port: v || 22 })} />
+          <NumberRow
+            label="Public SSH port (client config / NAT)"
+            value={mod.public_port ?? 22}
+            min={1}
+            max={65535}
+            onChange={(v) => patch({ public_port: v || 22 })}
+          />
+          <NumberRow
+            label="Local sshd listen port (session detection)"
+            value={mod.listen_port ?? 22}
+            min={1}
+            max={65535}
+            onChange={(v) => patch({ listen_port: v || 22 })}
+          />
         </>
       )
     case 'wireguard':

@@ -105,14 +105,21 @@ async def history_ssh_tunnel(
         .limit(limit)
     )
     rows = (await db.execute(q)).scalars().all()
-    return [
-        {
-            "recorded_at": r.recorded_at,
-            "active_count": r.active_count,
-            "users_connected": r.users_connected,
-        }
-        for r in rows
-    ]
+    out = []
+    for r in rows:
+        payload = r.payload or {}
+        out.append(
+            {
+                "recorded_at": r.recorded_at,
+                "active_count": r.active_count,
+                "users_connected": r.users_connected,
+                "bytes_sent_total": payload.get("bytes_sent_total"),
+                "bytes_recv_total": payload.get("bytes_recv_total"),
+                "bytes_sent_rate_total": payload.get("bytes_sent_rate_total"),
+                "bytes_recv_rate_total": payload.get("bytes_recv_rate_total"),
+            }
+        )
+    return out
 
 
 @router.get("/ssh-tunnel/connections")
@@ -139,22 +146,38 @@ async def history_ssh_connections(
         q = q.where(SshConnectionEvent.status == status)
     q = q.order_by(SshConnectionEvent.started_at.desc()).limit(limit)
     rows = (await db.execute(q)).scalars().all()
-    return [
-        {
-            "id": r.id,
-            "session_key": r.session_key,
-            "username": r.username,
-            "remote_ip": r.remote_ip,
-            "remote_port": r.remote_port,
-            "pid": r.pid,
-            "status": r.status,
-            "started_at": r.started_at,
-            "ended_at": r.ended_at,
-            "duration_seconds": r.duration_seconds,
-            "forwards_count": r.forwards_count,
-            "forwards": (r.payload or {}).get("forwards") or [],
-            "remote": (r.payload or {}).get("remote")
-            or (f"{r.remote_ip}:{r.remote_port}" if r.remote_ip else None),
-        }
-        for r in rows
-    ]
+    result = []
+    for r in rows:
+        payload = r.payload or {}
+        duration = r.duration_seconds
+        if r.status == "active" and r.started_at is not None:
+            try:
+                started = r.started_at
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                duration = max(0, int((now - started).total_seconds()))
+            except Exception:
+                pass
+        result.append(
+            {
+                "id": r.id,
+                "session_key": r.session_key,
+                "username": r.username,
+                "remote_ip": r.remote_ip,
+                "remote_port": r.remote_port,
+                "pid": r.pid,
+                "status": r.status,
+                "started_at": r.started_at,
+                "ended_at": r.ended_at,
+                "duration_seconds": duration,
+                "forwards_count": r.forwards_count,
+                "forwards": payload.get("forwards") or [],
+                "remote": payload.get("remote")
+                or (f"{r.remote_ip}:{r.remote_port}" if r.remote_ip else None),
+                "bytes_sent": payload.get("bytes_sent"),
+                "bytes_recv": payload.get("bytes_recv"),
+                "bytes_sent_rate": payload.get("bytes_sent_rate"),
+                "bytes_recv_rate": payload.get("bytes_recv_rate"),
+            }
+        )
+    return result
