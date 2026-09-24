@@ -116,7 +116,7 @@ Always override `domain`. For proxy templates also override `backend_host`. For 
 
 Backups are listed in the UI; you can roll back explicitly.
 
-Apply also handles two common host conflicts:
+Apply also handles common host conflicts:
 
 - If `/etc/nginx/sites-enabled` already has `listen … default_server` on port 80, the managed ACME server does not add another `default_server`.
 - If host `nginx.service` is inactive, Apply removes an empty `/run/nginx.pid` and starts the unit instead of reloading a dead pid.
