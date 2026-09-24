@@ -10,9 +10,9 @@ Web-based administration panel for a Linux host: live system metrics, historical
 |------|----------------|
 | **Overview** | Live CPU / RAM / swap / disk / network, load average, processes, temperatures, OS info |
 | **History** | Time-range charts from PostgreSQL; SSH tunnel activity, traffic rates, and connection log |
-| **Fail2ban** | Jail status, banned IPs, logs; optional ban/unban and jail parameter updates |
+| **Fail2ban** | Jail status, banned IPs, logs; optional ban/unban and jail parameter updates. Ignore IP lists are written to `jail.d` and survive reload |
 | **Firewall** | Auto-detect ufw / firewalld / nftables / iptables |
-| **Docker** | Containers, images, disk usage |
+| **Docker** | Containers with live CPU, memory, network/block I/O, PIDs, and disk usage |
 | **Network** | Listening / established sockets, interfaces; optional iface up/down & process kill |
 | **Disks** | Partitions, I/O, safe browse under mount points |
 | **Users / Services** | Local accounts & systemd units (mutations optional) |
@@ -20,7 +20,7 @@ Web-based administration panel for a Linux host: live system metrics, historical
 | **SSH Tunnel** | Jump-host users (`nologin`), keys / BYOK, `permitopen` destinations, live sessions (duration + TCP traffic), history, client ZIP pack |
 | **WireGuard** | VPN server, peers, full/split/custom routes, client `.conf` download + QR codes |
 | **OpenVPN** | VPN server, clients, full/split/custom routes, `.ovpn` download (QR when small) |
-| **Nginx Edge** | Reverse proxy (HTTP/HTTPS/TCP/UDP), TLS termination & SNI passthrough, certs, Let's Encrypt, route templates (Carbonio, Nextcloud, …), safe apply + rollback |
+| **Nginx Edge** | Reverse proxy (HTTP/HTTPS/TCP/UDP), static directories, TLS termination & SNI passthrough, cert upload (files or PEM text), Let's Encrypt, route templates (Carbonio, Nextcloud, static site, …), safe apply + rollback |
 | **Access** | Panel users, RBAC roles (none/read/full per module), API keys for integrations |
 | **Docs** | In-app documentation on every module + API integration guide |
 
@@ -78,6 +78,16 @@ make systemd-install   # install/enable systemd unit (root)
 ```
 
 After first start you can always change the panel database, admin password, and CORS in **Settings → Connection**, and enable modules / fine-tune them under **Settings → Modules** (card grid → detail page; PostgreSQL connection is inside the PostgreSQL card).
+
+Settings is a set of pages, not tabs:
+
+| Path | Section |
+|------|---------|
+| `/settings/project` | Project name and appearance |
+| `/settings/connection` | Database, admin password, CORS |
+| `/settings/modules` | Module cards |
+| `/settings/module/<key>` | One module, for example `/settings/module/fail2ban` |
+| `/settings/access` | Users, roles, API keys |
 
 ### Development (API + Vite)
 
@@ -222,11 +232,15 @@ Settings: **Settings → Modules → SSH Tunnel** (`public_hostname`, `public_po
 
 ## Nginx Edge Proxy
 
-Publish apps through a managed edge nginx on this host: HTTPS reverse proxy, TLS passthrough (SNI), TCP/UDP, certificates, Let’s Encrypt, templates (Carbonio, Nextcloud, OnlyOffice, Grafana, …), and safe apply with automatic rollback.
+Publish apps through a managed edge nginx on this host: HTTPS reverse proxy, static files from a directory, TLS passthrough (SNI), TCP/UDP, certificates, Let’s Encrypt, templates (Carbonio, Nextcloud, OnlyOffice, Grafana, static directory, …), and safe apply with automatic rollback.
 
 Operator guide (modes, ACME vs backends, Carbonio, troubleshooting): [docs/nginx-edge.md](docs/nginx-edge.md).
 
 Typical flow: enable module → install nginx → issue LE for the public hostname → create route from template → point WAN **80/443** at this Edge host → Apply. Backend `backend_host` must be the app server IP, not the Edge itself.
+
+**Static directory** serves a folder on this host (`static_http` on port 80, `static_https` on 443). No backend host. Example: `ps.ismarty.pro` → `/projects/ps.ismarty.pro`, index `iscript.ps1`. HTTPS uses an uploaded certificate whose SAN covers the name.
+
+Certificates can be added as **files** (default) or pasted as PEM text. Apply starts host nginx if it is stopped, and it will not add a second `default_server` when the distro site already has one. If another process already holds ports 80/443, the public ACME listener is omitted so host nginx can still run for `stub_status`.
 
 ---
 

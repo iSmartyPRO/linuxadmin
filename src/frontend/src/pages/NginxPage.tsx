@@ -17,6 +17,7 @@ import {
   Tabs,
   Tag,
   Typography,
+  Upload,
   message,
 } from 'antd'
 import {
@@ -35,6 +36,7 @@ import {
   ApiOutlined,
   AppstoreOutlined,
   WarningOutlined,
+  UploadOutlined,
 } from '@ant-design/icons'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip } from 'recharts'
 import { api } from '../api/client'
@@ -54,6 +56,8 @@ type Route = {
   frontend_port?: number
   backend_host?: string
   backend_port?: number
+  static_root?: string
+  index?: string
   backends?: Backend[]
   backend_proto?: string
   lb_method?: string
@@ -150,6 +154,8 @@ function routeToFormValues(r?: Partial<Route> | Record<string, any> | null) {
       (d.proxy_type === 'http_reverse' ? 80 : d.proxy_type === 'tcp' || d.proxy_type === 'udp' ? d.frontend_port : 443),
     backend_host: d.backend_host || d.backends?.[0]?.host || '',
     backend_port: d.backend_port || d.backends?.[0]?.port || 8080,
+    static_root: d.static_root || '',
+    index: d.index || 'index.html index.htm',
     backend_proto: d.backend_proto || 'http',
     lb_method: d.lb_method || 'round_robin',
     cert_id: d.cert_id || undefined,
@@ -185,6 +191,8 @@ function formToRouteBody(v: Record<string, any>, editingId?: string) {
     frontend_port: v.frontend_port,
     backend_host: v.backend_host,
     backend_port: v.backend_port,
+    static_root: v.static_root,
+    index: v.index,
     backend_proto: v.backend_proto,
     lb_method: v.lb_method,
     cert_id: v.cert_id || null,
@@ -216,6 +224,8 @@ export function NginxPage() {
   const [routeErrors, setRouteErrors] = useState<FieldIssue[]>([])
   const [routeWarnings, setRouteWarnings] = useState<FieldIssue[]>([])
   const [certOpen, setCertOpen] = useState(false)
+  const [certAsText, setCertAsText] = useState(false)
+  const [certFiles, setCertFiles] = useState<Record<string, string>>({})
   const [acmeOpen, setAcmeOpen] = useState(false)
   const [acmeTxt, setAcmeTxt] = useState<{
     name?: string
@@ -450,7 +460,8 @@ export function NginxPage() {
   const proxyTypes = data.proxy_types || {}
   const isStream =
     proxyType === 'tls_passthrough' || proxyType === 'tcp' || proxyType === 'udp'
-  const isHttps = proxyType === 'https_reverse'
+  const isHttps = proxyType === 'https_reverse' || proxyType === 'static_https'
+  const isStatic = proxyType === 'static_http' || proxyType === 'static_https'
   const isPassthrough = proxyType === 'tls_passthrough'
 
   const dashboard = (
@@ -673,9 +684,11 @@ export function NginxPage() {
           {
             title: 'Backend',
             render: (_, r) =>
-              (r.backends || [])
-                .map((b) => `${b.host}:${b.port}`)
-                .join(', ') || `${r.backend_host}:${r.backend_port}`,
+              r.proxy_type === 'static_http' || r.proxy_type === 'static_https'
+                ? r.static_root || '—'
+                : (r.backends || [])
+                    .map((b) => `${b.host}:${b.port}`)
+                    .join(', ') || `${r.backend_host}:${r.backend_port}`,
           },
           {
             title: 'Flags',
@@ -725,7 +738,16 @@ export function NginxPage() {
         title="Certificates"
         extra={
           <Space>
-            <Button disabled={!canMut} icon={<CloudUploadOutlined />} onClick={() => { certForm.resetFields(); setCertOpen(true) }}>
+            <Button
+              disabled={!canMut}
+              icon={<CloudUploadOutlined />}
+              onClick={() => {
+                certForm.resetFields()
+                setCertAsText(false)
+                setCertFiles({})
+                setCertOpen(true)
+              }}
+            >
               Upload PEM
             </Button>
             <Button disabled={!canMut || !data.installed} onClick={() => setAcmeOpen(true)}>
@@ -1143,9 +1165,27 @@ export function NginxPage() {
               </Form.Item>
             </Col>
           </Row>
+          {isStatic ? (
+            <Row gutter={12}>
+              <Col span={14}>
+                <Form.Item
+                  name="static_root"
+                  label="Directory"
+                  rules={[{ required: true, message: 'Absolute folder path is required' }]}
+                >
+                  <Input placeholder="/projects/site" />
+                </Form.Item>
+              </Col>
+              <Col span={10}>
+                <Form.Item name="index" label="Index files">
+                  <Input placeholder="index.html iscript.ps1" />
+                </Form.Item>
+              </Col>
+            </Row>
+          ) : (
           <Row gutter={12}>
             <Col span={10}>
-              <Form.Item name="backend_host" label="Backend host / DNS / docker:svc" rules={[{ required: true }]}>
+              <Form.Item name="backend_host" label="Backend host / DNS / docker:svc" rules={[{ required: !isStatic }]}>
                 <Input placeholder="127.0.0.1 or docker:web" />
               </Form.Item>
             </Col>
@@ -1167,6 +1207,7 @@ export function NginxPage() {
               </Form.Item>
             </Col>
           </Row>
+          )}
           {isHttps ? (
             <Form.Item name="cert_id" label="Certificate" rules={[{ required: true, message: 'HTTPS requires a certificate' }]}>
               <Select
@@ -1285,8 +1326,9 @@ export function NginxPage() {
                   {tpl.summary}
                 </Typography.Paragraph>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Backend {(tpl.defaults.backend_host || '?') + ':' + (tpl.defaults.backend_port || '?')} · port{' '}
-                  {tpl.defaults.frontend_port}
+                  {tpl.defaults.static_root
+                    ? `Folder ${tpl.defaults.static_root} · port ${tpl.defaults.frontend_port}`
+                    : `Backend ${(tpl.defaults.backend_host || '?') + ':' + (tpl.defaults.backend_port || '?')} · port ${tpl.defaults.frontend_port}`}
                 </Typography.Text>
                 <div style={{ marginTop: 10 }}>
                   <Button type="link" size="small" disabled={!canMut} style={{ padding: 0 }}>
@@ -1333,15 +1375,71 @@ export function NginxPage() {
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="certificate_pem" label="Certificate / fullchain PEM" rules={[{ required: true }]}>
-            <Input.TextArea rows={5} />
+          <Form.Item label="Add as">
+            <Space>
+              <Button type={certAsText ? 'default' : 'primary'} onClick={() => setCertAsText(false)}>
+                Files
+              </Button>
+              <Button type={certAsText ? 'primary' : 'default'} onClick={() => setCertAsText(true)}>
+                Text
+              </Button>
+            </Space>
           </Form.Item>
-          <Form.Item name="chain_pem" label="Chain PEM (optional)">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-          <Form.Item name="private_key_pem" label="Private key PEM" rules={[{ required: true }]}>
-            <Input.TextArea rows={5} />
-          </Form.Item>
+          {certAsText ? (
+            <>
+              <Form.Item name="certificate_pem" label="Certificate / fullchain PEM" rules={[{ required: true }]}>
+                <Input.TextArea rows={5} className="mono" />
+              </Form.Item>
+              <Form.Item name="chain_pem" label="Chain PEM (optional)">
+                <Input.TextArea rows={3} className="mono" />
+              </Form.Item>
+              <Form.Item name="private_key_pem" label="Private key PEM" rules={[{ required: true }]}>
+                <Input.TextArea rows={5} className="mono" />
+              </Form.Item>
+            </>
+          ) : (
+            <>
+              {(
+                [
+                  ['certificate_pem', 'Certificate / fullchain', true, '.pem,.crt,.cer'],
+                  ['chain_pem', 'Chain (optional)', false, '.pem,.crt,.cer'],
+                  ['private_key_pem', 'Private key', true, '.pem,.key'],
+                ] as const
+              ).map(([field, label, required, accept]) => (
+                <Form.Item
+                  key={field}
+                  name={field}
+                  label={label}
+                  rules={required ? [{ required: true, message: 'Choose a PEM file' }] : undefined}
+                >
+                  <div>
+                    <Upload
+                      accept={accept}
+                      maxCount={1}
+                      showUploadList={false}
+                      beforeUpload={(file) => {
+                        const reader = new FileReader()
+                        reader.onload = () => {
+                          certForm.setFieldValue(field, String(reader.result || ''))
+                          setCertFiles((prev) => ({ ...prev, [field]: file.name }))
+                          void certForm.validateFields([field]).catch(() => undefined)
+                        }
+                        reader.readAsText(file)
+                        return false
+                      }}
+                    >
+                      <Button icon={<UploadOutlined />}>Choose file</Button>
+                    </Upload>
+                    {certFiles[field] ? (
+                      <Typography.Text type="secondary" style={{ display: 'block', marginTop: 6 }}>
+                        {certFiles[field]}
+                      </Typography.Text>
+                    ) : null}
+                  </div>
+                </Form.Item>
+              ))}
+            </>
+          )}
         </Form>
       </Modal>
 

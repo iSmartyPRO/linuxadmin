@@ -38,6 +38,8 @@ PROXY_TYPES = {
     "tls_passthrough": {"label": "TLS Passthrough (SNI / stream)", "layer": "stream"},
     "tcp": {"label": "TCP Proxy", "layer": "stream"},
     "udp": {"label": "UDP Proxy", "layer": "stream"},
+    "static_http": {"label": "Static directory (HTTP)", "layer": "http"},
+    "static_https": {"label": "Static directory (HTTPS)", "layer": "http"},
 }
 
 LB_METHODS = ("round_robin", "least_conn", "ip_hash")
@@ -47,6 +49,34 @@ ACME_ENVIRONMENTS = ("production", "staging", "custom")
 # Fields under "defaults" are applied first; user overrides merge on top.
 # "hints" = UI tips; "required_overrides" = fields user should usually change.
 ROUTE_TEMPLATES: list[dict[str, Any]] = [
+    {
+        "id": "static_directory",
+        "title": "Static directory",
+        "category": "Web",
+        "icon": "folder",
+        "summary": "Serve a folder from disk over HTTP or HTTPS. No backend host.",
+        "hints": [
+            "static_root must be an absolute path on this host, for example /projects/site.",
+            "Use Static directory (HTTP) on port 80 and Static directory (HTTPS) on 443 for the same folder.",
+            "HTTPS needs a certificate that covers the domain.",
+        ],
+        "required_overrides": ["domain", "name", "static_root"],
+        "defaults": {
+            "name": "static-site",
+            "domain": "files.example.com",
+            "aliases": [],
+            "proxy_type": "static_https",
+            "frontend_ip": "0.0.0.0",
+            "frontend_port": 443,
+            "static_root": "/var/www/site",
+            "index": "index.html index.htm",
+            "client_max_body_size": "100m",
+            "http2": True,
+            "logging": True,
+            "enabled": True,
+            "cert_id": None,
+        },
+    },
     {
         "id": "nextcloud_docker",
         "title": "Nextcloud (Docker)",
@@ -883,9 +913,22 @@ def _normalize_route(body: dict[str, Any], existing: dict[str, Any] | None = Non
     if frontend_port < 1 or frontend_port > 65535:
         return None, "frontend_port out of range"
 
+    is_static = proxy_type in ("static_http", "static_https")
+    static_root = ""
+    index_files = "index.html index.htm"
+    if is_static:
+        raw_root = str(body.get("static_root") if "static_root" in body else base.get("static_root") or "").strip()
+        if not raw_root.startswith("/") or ".." in raw_root or any(c in raw_root for c in ";{}\\\n\r"):
+            return None, "static_root must be an absolute directory path"
+        static_root = raw_root
+        raw_index = str(body.get("index") if "index" in body else base.get("index") or "index.html index.htm").strip()
+        if not raw_index or any(c in raw_index for c in ";{}\\\n\r"):
+            return None, "Invalid index"
+        index_files = raw_index
+        norm_backends = []
     # Prefer explicit backends[]; if backend_host/port are sent, rebuild from them
     # so updates don't keep a stale backends[] from a previous save.
-    if "backends" in body and body.get("backends"):
+    elif "backends" in body and body.get("backends"):
         backends = body.get("backends")
     elif "backend_host" in body or "backend_port" in body or not base.get("backends"):
         prev = (base.get("backends") or [{}])[0] if isinstance(base.get("backends"), list) else {}
@@ -903,48 +946,49 @@ def _normalize_route(body: dict[str, Any], existing: dict[str, Any] | None = Non
         backends = [{"host": host, "port": port, "weight": 1}]
     else:
         backends = base.get("backends")
-    if not isinstance(backends, list) or not backends:
-        return None, "At least one backend is required"
+    if not is_static:
+        if not isinstance(backends, list) or not backends:
+            return None, "At least one backend is required"
 
-    norm_backends: list[dict[str, Any]] = []
-    for b in backends:
-        if not isinstance(b, dict):
-            return None, "Invalid backend entry"
-        host = str(b.get("host") or "").strip()
-        try:
-            port = int(b.get("port") or 80)
-            weight = int(b.get("weight") or 1)
-        except (TypeError, ValueError):
-            return None, "Invalid backend port/weight"
-        if not _valid_host(host) or port < 1 or port > 65535 or weight < 1 or weight > 1000:
-            return None, f"Invalid backend: {host}:{port}"
-        # prevent pointing backend at this edge listener (proxy loop → 400/502)
-        if port == frontend_port and host in (frontend_ip, "127.0.0.1", "localhost", "::1"):
-            return None, "Backend must not point at the same frontend listener (loop risk)"
-        if port == frontend_port and frontend_ip in ("0.0.0.0", "*", "::"):
+        norm_backends = []
+        for b in backends:
+            if not isinstance(b, dict):
+                return None, "Invalid backend entry"
+            host = str(b.get("host") or "").strip()
             try:
-                import socket as _socket
+                port = int(b.get("port") or 80)
+                weight = int(b.get("weight") or 1)
+            except (TypeError, ValueError):
+                return None, "Invalid backend port/weight"
+            if not _valid_host(host) or port < 1 or port > 65535 or weight < 1 or weight > 1000:
+                return None, f"Invalid backend: {host}:{port}"
+            # prevent pointing backend at this edge listener (proxy loop → 400/502)
+            if port == frontend_port and host in (frontend_ip, "127.0.0.1", "localhost", "::1"):
+                return None, "Backend must not point at the same frontend listener (loop risk)"
+            if port == frontend_port and frontend_ip in ("0.0.0.0", "*", "::"):
+                try:
+                    import socket as _socket
 
-                local_ips = {"127.0.0.1", "::1"}
-                for _info in _socket.getaddrinfo(_socket.gethostname(), None):
-                    local_ips.add(_info[4][0])
-                # hostname -I lists assigned addresses (sync; normalize_route is not async)
-                import subprocess as _sp
+                    local_ips = {"127.0.0.1", "::1"}
+                    for _info in _socket.getaddrinfo(_socket.gethostname(), None):
+                        local_ips.add(_info[4][0])
+                    # hostname -I lists assigned addresses (sync; normalize_route is not async)
+                    import subprocess as _sp
 
-                hi = _sp.run(["hostname", "-I"], capture_output=True, text=True, timeout=2)
-                if hi.returncode == 0:
-                    local_ips.update(hi.stdout.split())
-                if host in local_ips:
-                    return None, "Backend must not point at this host's own IP on the frontend port (loop risk)"
-            except Exception:
-                pass
-        norm_backends.append({
-            "host": host,
-            "port": port,
-            "weight": weight,
-            "max_fails": int(b.get("max_fails") or 3),
-            "fail_timeout": str(b.get("fail_timeout") or "10s"),
-        })
+                    hi = _sp.run(["hostname", "-I"], capture_output=True, text=True, timeout=2)
+                    if hi.returncode == 0:
+                        local_ips.update(hi.stdout.split())
+                    if host in local_ips:
+                        return None, "Backend must not point at this host's own IP on the frontend port (loop risk)"
+                except Exception:
+                    pass
+            norm_backends.append({
+                "host": host,
+                "port": port,
+                "weight": weight,
+                "max_fails": int(b.get("max_fails") or 3),
+                "fail_timeout": str(b.get("fail_timeout") or "10s"),
+            })
 
     lb = str(body.get("lb_method") or base.get("lb_method") or "round_robin")
     if lb not in LB_METHODS:
@@ -977,7 +1021,7 @@ def _normalize_route(body: dict[str, Any], existing: dict[str, Any] | None = Non
             headers.append({"name": hn, "value": hv})
 
     cert_id = body.get("cert_id") if "cert_id" in body else base.get("cert_id")
-    if proxy_type == "https_reverse" and not cert_id:
+    if proxy_type in ("https_reverse", "static_https") and not cert_id:
         # allow empty until cert assigned; apply will warn
         cert_id = base.get("cert_id")
 
@@ -1016,8 +1060,10 @@ def _normalize_route(body: dict[str, Any], existing: dict[str, Any] | None = Non
         "frontend_ip": frontend_ip,
         "frontend_port": frontend_port,
         "backends": norm_backends,
-        "backend_host": norm_backends[0]["host"],
-        "backend_port": norm_backends[0]["port"],
+        "backend_host": norm_backends[0]["host"] if norm_backends else "",
+        "backend_port": norm_backends[0]["port"] if norm_backends else 0,
+        "static_root": static_root,
+        "index": index_files,
         "backend_proto": backend_proto,
         "lb_method": lb,
         "connect_timeout": max(1, min(connect_timeout, 86400)),
@@ -1237,11 +1283,12 @@ async def _verify_cert_key(cert_pem: str, key_pem: str) -> tuple[bool, str]:
 
 
 def _render_http_route(opts: dict[str, Any], route: dict[str, Any]) -> str:
-    up = _upstream_name(route)
+    is_static = route["proxy_type"] in ("static_http", "static_https")
+    up = "" if is_static else _upstream_name(route)
     names = [route["domain"]] + list(route.get("aliases") or [])
     server_name = " ".join(names) if names else "_"
     port = int(route["frontend_port"])
-    ssl = route["proxy_type"] == "https_reverse"
+    ssl = route["proxy_type"] in ("https_reverse", "static_https")
     # nginx 1.24 (Ubuntu) uses "listen ... http2"; "http2 on;" needs >= 1.25.1
     http2 = bool(route.get("http2")) and ssl
     listen = _listen_addr(route["frontend_ip"], port)
@@ -1250,13 +1297,10 @@ def _render_http_route(opts: dict[str, Any], route: dict[str, Any]) -> str:
     if http2:
         listen = f"{listen} http2"
     proto = route.get("backend_proto") or "http"
-    lines = [
-        MANAGED_MARKER,
-        _render_upstream(route),
-        "",
-        "server {",
-        f"    listen {listen};",
-    ]
+    lines = [MANAGED_MARKER]
+    if not is_static:
+        lines.extend([_render_upstream(route), ""])
+    lines.extend(["server {", f"    listen {listen};"])
     if route["frontend_ip"] in ("0.0.0.0", "*"):
         v6 = f"    listen [::]:{port}"
         if ssl:
@@ -1291,6 +1335,24 @@ def _render_http_route(opts: dict[str, Any], route: dict[str, Any]) -> str:
     # Keep ACME reachable even when this vhost owns the hostname on :80
     if int(route.get("frontend_port") or 0) == 80 or route.get("proxy_type") == "http_reverse":
         lines.append(_render_acme_location(opts).rstrip())
+
+    if is_static:
+        root = route.get("static_root") or "/var/www/html"
+        index = route.get("index") or "index.html index.htm"
+        lines.extend(
+            [
+                f"    root {root};",
+                f"    index {index};",
+                "    location ~* \\.(ps1|psm1|psd1|sh)$ {",
+                "        default_type text/plain;",
+                "    }",
+                "    location / {",
+                "        try_files $uri $uri/ =404;",
+                "    }",
+                "}",
+            ]
+        )
+        return "\n".join(lines) + "\n"
 
     lines.extend(
         [
@@ -1411,7 +1473,36 @@ def _render_acme_location(opts: dict[str, Any], indent: str = "    ") -> str:
     )
 
 
-def _render_map_upgrade(opts: dict[str, Any] | None = None, extra_server_names: list[str] | None = None) -> str:
+def _foreign_default_server(port: int) -> bool:
+    """True when a non-managed nginx file already has default_server on this port."""
+    root = Path("/etc/nginx")
+    managed = Path(DEFAULT_MANAGED_DIR)
+    if not root.is_dir():
+        return False
+    needle = re.compile(rf"listen\s+[^\n;]*default_server[^\n;]*:{port}\b|listen\s+[^\n;]*:{port}[^\n;]*default_server|listen\s+[^\n;]*\b{port}\b[^\n;]*default_server")
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            path.resolve().relative_to(managed.resolve())
+            continue
+        except ValueError:
+            pass
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if needle.search(text):
+            return True
+    return False
+
+
+def _render_map_upgrade(
+    opts: dict[str, Any] | None = None,
+    extra_server_names: list[str] | None = None,
+    *,
+    public_http: bool = True,
+) -> str:
     """Core maps + localhost stub_status + public :80 ACME HTTP-01 server."""
     o = _opts(opts)
     names: list[str] = []
@@ -1424,17 +1515,18 @@ def _render_map_upgrade(opts: dict[str, Any] | None = None, extra_server_names: 
     for r in state.get("routes") or []:
         if not r.get("enabled", True):
             continue
-        if r.get("proxy_type") not in ("http_reverse", "https_reverse"):
+        if r.get("proxy_type") not in ("http_reverse", "https_reverse", "static_http", "static_https"):
             continue
         for n in [r.get("domain"), *(r.get("aliases") or [])]:
             n = str(n or "").strip().lower().rstrip(".")
             if n and n not in names and _valid_domain(n) and not n.startswith("*."):
                 names.append(n)
-    # "_" never matches real Host headers; without domains use default_server for ACME only
-    use_default = not names
+    # "_" never matches real Host headers; without domains use default_server for ACME only.
+    # Skip it when the distro site (sites-enabled/default) already owns default_server on :80.
+    use_default = not names and not _foreign_default_server(80)
     server_name = " ".join(names) if names else "_"
     listen_extra = " default_server" if use_default else ""
-    return f"""{MANAGED_MARKER}
+    text = f"""{MANAGED_MARKER}
 # WebSocket Connection header helper
 map $http_upgrade $connection_upgrade {{
     default upgrade;
@@ -1451,7 +1543,10 @@ server {{
         deny all;
     }}
 }}
-
+"""
+    if not public_http:
+        return text + "\n# Public :80 is already taken by another process; ACME listener omitted.\n"
+    return text + f"""
 # HTTP-01 ACME challenges — must be reachable from the public Internet on :80
 server {{
     listen 80{listen_extra};
@@ -1703,8 +1798,8 @@ async def generate_config_preview(options: dict[str, Any] | None = None) -> dict
         if not r.get("enabled", True):
             continue
         pt = r.get("proxy_type")
-        if pt in ("http_reverse", "https_reverse"):
-            if pt == "https_reverse" and not r.get("cert_id"):
+        if pt in ("http_reverse", "https_reverse", "static_http", "static_https"):
+            if pt in ("https_reverse", "static_https") and not r.get("cert_id"):
                 return {"ok": False, "error": f"Route '{r.get('name')}' (HTTPS) has no certificate assigned"}
             route_parts.append(_render_http_route(opts, r))
         elif pt in ("tcp", "udp"):
@@ -1770,14 +1865,64 @@ async def _nginx_test() -> tuple[bool, str]:
     return code == 0, msg
 
 
+async def _port_holder(port: int) -> str:
+    """Process name listening on TCP port, or empty if the port is free."""
+    code, out, _err = await run_cmd(["ss", "-ltnp", f"sport = :{port}"], timeout=8.0)
+    if code != 0:
+        return ""
+    for line in (out or "").splitlines():
+        if f":{port}" not in line:
+            continue
+        match = re.search(r'users:\(\("([^"]+)"', line)
+        if match:
+            return match.group(1)
+    return ""
+
+
+async def _host_nginx_can_bind_public() -> tuple[bool, str]:
+    """Host nginx cannot bind :80/:443 when another process already holds them."""
+    holders = []
+    for port in (80, 443):
+        name = await _port_holder(port)
+        if name and name not in ("nginx",):
+            holders.append(f"{port} ({name})")
+    if holders:
+        return False, ", ".join(holders)
+    return True, ""
+
+
+def _park_distro_default_site() -> None:
+    """Drop Debian's sites-enabled/default so host nginx does not listen on :80.
+
+    The parked symlink must leave sites-enabled: nginx includes every file in that directory.
+    """
+    link = Path("/etc/nginx/sites-enabled/default")
+    parked = Path("/etc/nginx/sites-available/default.disabled-by-lnxadmin")
+    leftover = Path("/etc/nginx/sites-enabled/default.disabled-by-lnxadmin")
+    if leftover.is_symlink() or leftover.is_file():
+        leftover.unlink()
+    if link.is_symlink() and not parked.exists():
+        link.rename(parked)
+    elif link.is_symlink():
+        link.unlink()
+
+
 async def _nginx_reload() -> tuple[bool, str]:
-    code, out, err = await run_privileged(["nginx", "-s", "reload"], timeout=20.0)
-    if code == 0:
-        return True, (out or err or "reloaded").strip()
-    # try systemctl
-    code2, out2, err2 = await run_privileged(["systemctl", "reload", "nginx"], timeout=20.0)
-    msg = ((out2 or "") + (err2 or "") + (out or "") + (err or "")).strip()
-    return code2 == 0, msg
+    """Reload a running nginx, or start the systemd unit if it is inactive."""
+    code, out, _err = await run_privileged(["systemctl", "is-active", "nginx"], timeout=15.0)
+    active = code == 0 and (out or "").strip() == "active"
+    if not active:
+        pid_path = Path("/run/nginx.pid")
+        if pid_path.is_file() and pid_path.stat().st_size == 0:
+            await run_privileged(["rm", "-f", str(pid_path)], timeout=10.0)
+        code_s, out_s, err_s = await run_privileged(["systemctl", "start", "nginx"], timeout=25.0)
+        msg = ((out_s or "") + (err_s or "")).strip()
+        if code_s != 0:
+            return False, msg or "nginx is not running and systemctl start failed"
+        return True, "started"
+    code_r, out_r, err_r = await run_privileged(["systemctl", "reload", "nginx"], timeout=20.0)
+    msg = ((out_r or "") + (err_r or "")).strip()
+    return code_r == 0, msg or "reloaded"
 
 
 async def apply_config(options: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1819,6 +1964,17 @@ async def apply_config(options: dict[str, Any] | None = None) -> dict[str, Any]:
     if not ok:
         return {"ok": False, "error": f"Write stream config failed: {err}"}
 
+    can_bind, held = await _host_nginx_can_bind_public()
+    if not can_bind:
+        _park_distro_default_site()
+        ok, err = await _write_file_priv(
+            acme_path,
+            _render_map_upgrade(opts, public_http=False),
+            "644",
+        )
+        if not ok:
+            return {"ok": False, "error": f"Write ACME/bootstrap config failed: {err}"}
+
     test_ok, test_msg = await _nginx_test()
     if not test_ok:
         # rollback managed files from backup
@@ -1830,6 +1986,10 @@ async def apply_config(options: dict[str, Any] | None = None) -> dict[str, Any]:
         return {"ok": False, "error": f"nginx -t failed: {test_msg}", "backup": ts, "rolled_back": True}
 
     reload_ok, reload_msg = await _nginx_reload()
+    if reload_ok and not can_bind:
+        reload_msg = (
+            f"{reload_msg}; public {held} stays with the process already listening there"
+        )
     if not reload_ok:
         await run_privileged(["rm", "-rf", str(_managed(opts) / "http.d")])
         await run_privileged(["rm", "-rf", str(_managed(opts) / "stream.d")])
@@ -2040,7 +2200,7 @@ async def validate_route(
     warnings.extend(_template_placeholder_warnings(route, template))
 
     # Extra field checks
-    if route.get("proxy_type") in ("http_reverse", "https_reverse", "tls_passthrough"):
+    if route.get("proxy_type") in ("http_reverse", "https_reverse", "static_http", "static_https", "tls_passthrough"):
         if not route.get("domain") and route.get("proxy_type") != "tcp":
             if route["proxy_type"] != "tcp":
                 errors.append({"field": "domain", "message": "Domain is required for this proxy type"})
@@ -2135,7 +2295,7 @@ async def upsert_route(body: dict[str, Any], options: dict[str, Any] | None = No
     result: dict[str, Any] = {"ok": True, "route": route}
     if apply_now:
         # Pre-check HTTPS cert
-        if route.get("proxy_type") == "https_reverse" and not route.get("cert_id"):
+        if route.get("proxy_type") in ("https_reverse", "static_https") and not route.get("cert_id"):
             result["apply"] = {"ok": False, "error": "HTTPS route has no certificate assigned"}
         else:
             result["apply"] = await apply_config(opts)

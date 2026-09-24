@@ -176,7 +176,7 @@ export function ModuleSettingsDetailPage() {
     void load().catch((e) => message.error(String(e)))
   }, [load, meta])
 
-  if (!meta) return <Navigate to="/settings" replace />
+  if (!meta) return <Navigate to="/settings/modules" replace />
 
   const patch = (p: Record<string, any>) => setMod((prev) => ({ ...prev, ...p }))
 
@@ -250,8 +250,8 @@ export function ModuleSettingsDetailPage() {
         subtitle={meta.description}
         docsKey={moduleKey}
         extra={
-          <Link to="/settings">
-            <Button icon={<ArrowLeftOutlined />}>All modules</Button>
+          <Link to="/settings/modules">
+            <Button icon={<ArrowLeftOutlined />}>Modules</Button>
           </Link>
         }
       />

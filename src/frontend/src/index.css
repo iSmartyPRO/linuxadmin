@@ -24,6 +24,7 @@
   --la-mono: 'JetBrains Mono', ui-monospace, monospace;
   --la-display: 'Syne', 'Manrope', sans-serif;
   --la-sans: 'Manrope', 'Segoe UI', sans-serif;
+  --la-link: var(--la-accent-deep);
 }
 
 html[data-theme='dark'] {
@@ -38,6 +39,7 @@ html[data-theme='dark'] {
   --la-mesh-c: rgba(255, 255, 255, 0.02);
   --la-sider: rgba(11, 18, 32, 0.72);
   --la-paper: #0b1220;
+  --la-link: #5eead4;
 }
 
 * {
@@ -87,6 +89,54 @@ body::after {
 
 a {
   color: inherit;
+}
+
+button {
+  font-family: inherit;
+  color: inherit;
+}
+
+.la-settings-card {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  padding: 18px 18px 16px;
+  color: var(--la-text);
+  border-radius: 16px;
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.la-settings-card:hover {
+  border-color: color-mix(in srgb, var(--la-accent-soft) 55%, var(--la-panel-border));
+  box-shadow: 0 12px 32px var(--la-glow);
+  transform: translateY(-1px);
+}
+
+.la-settings-card:focus-visible {
+  outline: 2px solid var(--la-accent-soft);
+  outline-offset: 2px;
+}
+
+html[data-theme='dark'] .ant-form-item-label > label,
+html[data-theme='dark'] .ant-form-item-extra,
+html[data-theme='dark'] .ant-typography,
+html[data-theme='dark'] .ant-tabs-tab-btn {
+  color: var(--la-text);
+}
+
+html[data-theme='dark'] .ant-form-item-extra,
+html[data-theme='dark'] .ant-typography-secondary {
+  color: var(--la-muted) !important;
+}
+
+html[data-theme='dark'] .ant-tag-default {
+  color: var(--la-text);
+  background: rgba(148, 163, 184, 0.14);
+  border-color: rgba(148, 163, 184, 0.28);
 }
 
 .mono {

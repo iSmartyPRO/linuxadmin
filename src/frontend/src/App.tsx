@@ -24,7 +24,14 @@ import { UsersPage } from './pages/UsersPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { PostgresPage } from './pages/PostgresPage'
 import { ModuleSettingsDetailPage } from './pages/ModuleSettingsDetailPage'
-import { SettingsPage } from './pages/SettingsPage'
+import {
+  SettingsAccessPage,
+  SettingsConnectionPage,
+  SettingsModulesPage,
+  SettingsPage,
+  SettingsProjectPage,
+} from './pages/SettingsPage'
+import { LegacyModuleSettingsRedirect } from './pages/LegacyModuleSettingsRedirect'
 import { ModuleGate } from './components/ModuleGate'
 import { buildAntdTheme } from './theme/tokens'
 
@@ -211,7 +218,12 @@ function Shell() {
               }
             />
             <Route path="settings" element={<SettingsPage />} />
-            <Route path="settings/modules/:moduleKey" element={<ModuleSettingsDetailPage />} />
+            <Route path="settings/project" element={<SettingsProjectPage />} />
+            <Route path="settings/connection" element={<SettingsConnectionPage />} />
+            <Route path="settings/modules" element={<SettingsModulesPage />} />
+            <Route path="settings/access" element={<SettingsAccessPage />} />
+            <Route path="settings/module/:moduleKey" element={<ModuleSettingsDetailPage />} />
+            <Route path="settings/modules/:moduleKey" element={<LegacyModuleSettingsRedirect />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -303,13 +303,35 @@ def _jail_dropin_path(jail: str) -> str:
     return f"{JAIL_D_DIR}/99-lnxadmin-{safe}.local"
 
 
+def _normalize_ignoreip_list(items: list[str] | None) -> list[str]:
+    """Deduplicate and keep only valid IP/CIDR entries (order preserved)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in items or []:
+        v = str(raw).strip()
+        if not v or v in seen or not _valid_ip_or_net(v):
+            continue
+        seen.add(v)
+        out.append(v)
+    return out
+
+
+async def _fetch_ignoreip(binary: str, jail: str) -> list[str]:
+    code, out, _ = await _run([binary, "get", jail, "ignoreip"])
+    if code != 0:
+        return []
+    return _normalize_ignoreip_list(_parse_ignoreip(out))
+
+
 async def _persist_jail_params(
     jail: str,
     *,
-    bantime: str | None,
-    findtime: str | None,
-    maxretry: str | None,
+    bantime: str | None = None,
+    findtime: str | None = None,
+    maxretry: str | None = None,
+    ignoreip: list[str] | None = None,
 ) -> tuple[bool, str]:
+    """Write/merge managed jail.d drop-in so reload/restart keeps panel changes."""
     path = _jail_dropin_path(jail)
     existing: dict[str, str] = {}
     try:
@@ -330,14 +352,21 @@ async def _persist_jail_params(
         existing["findtime"] = findtime
     if maxretry is not None:
         existing["maxretry"] = maxretry
+    if ignoreip is not None:
+        cleaned = _normalize_ignoreip_list(ignoreip)
+        if cleaned:
+            existing["ignoreip"] = " ".join(cleaned)
+        else:
+            # Explicit empty whitelist — remove override so DEFAULT ignoreip applies
+            existing.pop("ignoreip", None)
 
     lines = [
         MANAGED_MARKER,
-        f"# Jail ban conditions for [{jail}] — edited via Linux Admin",
+        f"# Jail settings for [{jail}] — edited via Linux Admin",
         f"[{jail}]",
         "enabled = true",
     ]
-    for key in ("bantime", "findtime", "maxretry"):
+    for key in ("bantime", "findtime", "maxretry", "ignoreip"):
         if key in existing:
             lines.append(f"{key} = {existing[key]}")
     return await _write_file(path, "\n".join(lines) + "\n")
@@ -395,11 +424,33 @@ async def fail2ban_action(
             return {"ok": False, "error": "Invalid jail"}
         if not ip or not _valid_ip_or_net(ip):
             return {"ok": False, "error": "Invalid IP/CIDR"}
+        target = ip.strip()
         sub = "addignoreip" if action == "add-ignoreip" else "delignoreip"
-        code, out, err = await run_privileged([binary, "set", str(jail), sub, ip.strip()])
+        code, out, err = await run_privileged([binary, "set", str(jail), sub, target])
         if code != 0:
             return {"ok": False, "error": (err or out or f"{action} failed").strip()[:400]}
-        return {"ok": True, "action": action, "jail": jail, "ip": ip.strip()}
+
+        # Runtime-only change is wiped by `fail2ban-client reload` — persist to jail.d.
+        current = await _fetch_ignoreip(binary, str(jail))
+        if action == "add-ignoreip" and target not in current:
+            current.append(target)
+        if action == "del-ignoreip":
+            current = [x for x in current if x != target]
+        warning = None
+        ok, perr = await _persist_jail_params(str(jail), ignoreip=current)
+        if not ok:
+            warning = f"Applied at runtime, but persist to jail.d failed: {perr}"
+
+        return {
+            "ok": True,
+            "action": action,
+            "jail": jail,
+            "ip": target,
+            "ignoreip": current,
+            "persisted": bool(ok),
+            "dropin": _jail_dropin_path(str(jail)) if ok else None,
+            "warning": warning,
+        }
 
     if action == "set-params":
         if not _valid_jail(jail):

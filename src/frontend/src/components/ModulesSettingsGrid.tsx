@@ -88,21 +88,8 @@ export function ModulesSettingsGrid() {
                 <Col xs={24} sm={12} lg={8} key={item.key}>
                   <button
                     type="button"
-                    onClick={() => navigate(`/settings/modules/${item.key}`)}
-                    className="la-panel"
-                    style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                      padding: 16,
-                      border: '1px solid var(--la-panel-border)',
-                      background: 'var(--la-panel)',
-                      borderRadius: 14,
-                      minHeight: 128,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 10,
-                    }}
+                    onClick={() => navigate(`/settings/module/${item.key}`)}
+                    className="la-panel la-settings-card"
                   >
                     <div
                       style={{
@@ -137,7 +124,7 @@ export function ModulesSettingsGrid() {
                         gap: 6,
                         fontSize: 12,
                         fontWeight: 600,
-                        color: 'var(--la-accent-deep)',
+                        color: 'var(--la-link)',
                       }}
                     >
                       Configure <RightOutlined style={{ fontSize: 10 }} />

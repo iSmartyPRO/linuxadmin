@@ -10,11 +10,12 @@ State lives under `/var/lib/lnxadmin/nginx/`. Generated config is written to `/e
 
 | Area | Details |
 |------|---------|
-| **Proxy modes** | HTTP reverse, HTTPS reverse (TLS termination), TLS passthrough (stream + SNI / `ssl_preread`), TCP, UDP |
+| **Proxy modes** | HTTP reverse, HTTPS reverse (TLS termination), static directory (HTTP/HTTPS), TLS passthrough (stream + SNI / `ssl_preread`), TCP, UDP |
 | **HTTP features** | WebSocket, HTTP/2, large header buffers (Carbonio/Zimbra), custom headers, body size limits, timeouts, IP allow/deny |
+| **Static sites** | `root` + `index` + `try_files` from an absolute directory. `.ps1` / `.psm1` / `.psd1` / `.sh` are served as `text/plain` |
 | **Load balancing** | Multiple backends, `round_robin` / `least_conn` / `ip_hash`, weights, `max_fails` / `fail_timeout` |
-| **Certificates** | Upload PEM, PFX, CSR generation; Let’s Encrypt HTTP-01 and manual DNS-01; auto-renew settings |
-| **Templates** | Nextcloud, OnlyOffice, Carbonio Web/Admin, generic web/API, MS RDS/RDP, Portainer, Grafana, Proxmox, Home Assistant, MinIO, PostgreSQL TCP, WireGuard UDP, TLS passthrough |
+| **Certificates** | Upload PEM as files (default) or pasted text, plus PFX and CSR; Let’s Encrypt HTTP-01 and manual DNS-01; auto-renew settings |
+| **Templates** | Static directory, Nextcloud, OnlyOffice, Carbonio Web/Admin, generic web/API, MS RDS/RDP, Portainer, Grafana, Proxmox, Home Assistant, MinIO, PostgreSQL TCP, WireGuard UDP, TLS passthrough |
 | **Lifecycle** | Install nginx/certbot if missing, start/stop/reload, config preview, safe apply, backups, rollback |
 | **Ops** | Per-route access/error logs, backend health probes, Prometheus-style metrics endpoint |
 | **RBAC** | Module **read** / **full**; mutations also require `allow_mutations` in Settings |
@@ -49,6 +50,23 @@ Edge does **not** decrypt TLS. Certificate stays on the backend. Renewal must ha
 
 Stream proxy for databases, RDP, WireGuard, etc. Combine with `allow_ips` when exposing sensitive ports.
 
+### Static directory
+
+Serves files from a folder on this host. There is no backend.
+
+| Field | Meaning |
+|-------|---------|
+| `proxy_type` | `static_http` or `static_https` |
+| `static_root` | Absolute path, for example `/projects/ps.ismarty.pro`. `..`, `;`, `{`, `}` are rejected |
+| `index` | Space-separated index names. Default `index.html index.htm`. A script site can use `iscript.ps1 index.html index.htm` |
+| `cert_id` | Required for `static_https` before Apply |
+
+Use two routes for the same folder when you want both schemes: HTTP on port 80 and HTTPS on port 443 with a certificate that covers the domain (a `*.example.com` upload is enough).
+
+Template **Static directory** (category Web) pre-fills HTTPS, port 443, and a placeholder root `/var/www/site`. Override `domain`, `name`, and `static_root`, then pick the certificate.
+
+`.ps1`, `.psm1`, `.psd1`, and `.sh` get `default_type text/plain` so browsers show the script instead of downloading it as an unknown type.
+
 ---
 
 ## Let’s Encrypt on Edge vs backends
@@ -78,12 +96,13 @@ Recommended for Carbonio:
 |----------|--------|
 | **Carbonio Web** | Backend = Carbonio IP (not Edge). Enables `large_headers`, WebSocket, long timeouts, `200m` body. |
 | **Carbonio Admin** | Backend `:6071`; restrict with `allow_ips` / VPN. Separate admin hostname + cert. |
+| **Static directory** | Folder on this host. Set `static_root`. HTTPS needs a certificate. No `backend_host`. |
 | **Nextcloud / OnlyOffice** | Large uploads, WebSocket where needed. |
 | **MS RDS / RDP** | HTTPS gateway or TCP as appropriate; change placeholder backend IP. |
 | **WireGuard UDP** | Stream UDP to `wg` listen port. |
 | **TLS passthrough** | SNI routing; certs renew on backend. |
 
-Always override `domain` and `backend_host`. Run **Check for errors** before apply.
+Always override `domain`. For proxy templates also override `backend_host`. For a static site override `static_root` instead. Run **Check for errors** before apply.
 
 ---
 
@@ -96,6 +115,12 @@ Always override `domain` and `backend_host`. Run **Check for errors** before app
 5. On failure — restore backup and reload again.
 
 Backups are listed in the UI; you can roll back explicitly.
+
+Apply also handles two common host conflicts:
+
+- If `/etc/nginx/sites-enabled` already has `listen … default_server` on port 80, the managed ACME server does not add another `default_server`.
+- If host `nginx.service` is inactive, Apply removes an empty `/run/nginx.pid` and starts the unit instead of reloading a dead pid.
+- If ports 80 or 443 are already held by another process (often Docker `nginx`), the public `:80` ACME listener is left out so host nginx can still start and serve `stub_status` on `127.0.0.1:8088`. Those routes stay in the panel, but they will not bind on the host until the other listener releases the ports. On a host where Docker owns 80/443, publish the same `root` in that container’s `conf.d` and mount the directory into the container.
 
 ---
 
@@ -152,6 +177,8 @@ Full OpenAPI: `/docs` in development (or when docs are enabled).
 |---------|----------------|
 | `400 Request Header Or Cookie Too Large` | Proxy loop (backend = Edge), or huge cookies — enable `large_headers`, clear site cookies, fix `backend_host` |
 | `502 Bad Gateway` | Backend down, wrong port/proto, or TLS handshake to upstream failed |
-| ACME / renew fails | WAN 80 not DNAT to Edge; firewall; another vhost stealing `/.well-known` |
+| ACME / renew fails | WAN 80 not DNAT to Edge; firewall; another vhost stealing `/.well-known`; public :80 omitted because Docker already holds the port |
+| `duplicate default server for 0.0.0.0:80` | Distro site in `sites-enabled` already has `default_server`. Apply skips a second one; move the distro symlink out of `sites-enabled` if you want Edge to own the default |
+| `nginx.service is not active` / empty pid | Apply starts nginx instead of `nginx -s reload`. If start still fails with `address already in use`, another process holds 80/443 |
 | `nginx -t` fails on `http2 on` | Ubuntu nginx 1.24 uses `listen … ssl http2` (module already generates that form) |
 | Admin UI exposed | Use `allow_ips`, VPN, or do not publish admin hostname publicly |

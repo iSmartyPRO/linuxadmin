@@ -312,6 +312,9 @@ export function Fail2banPage() {
                     + IP/CIDR
                   </Button>
                 ) : null}
+                <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+                  Saved to jail.d — survives Reload / restart
+                </Typography.Text>
               </Typography.Paragraph>
               <Space wrap>
                 {(jail.ignoreip || []).length
