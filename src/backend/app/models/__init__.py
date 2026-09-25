@@ -150,3 +150,40 @@ class SshConnectionEvent(Base):
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     forwards_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+
+class WireGuardSnapshot(Base):
+    """Periodic count of online WireGuard peers (for History charts)."""
+
+    __tablename__ = "wireguard_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    online_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    peer_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+
+class WireGuardConnectionEvent(Base):
+    """Connect/disconnect log derived from WireGuard handshakes."""
+
+    __tablename__ = "wireguard_connection_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_key: Mapped[str] = mapped_column(String(256), index=True)
+    peer_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    peer_name: Mapped[str] = mapped_column(String(64), index=True)
+    public_key: Mapped[str] = mapped_column(String(64), index=True)
+    vpn_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    remote_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    remote_port: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active|closed
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    transfer_rx: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    transfer_tx: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+

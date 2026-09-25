@@ -3,7 +3,7 @@ from __future__ import annotations
 import socket
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +11,7 @@ from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.principal import Principal, get_principal, require_module
+from app.services.fileman import FileManError, normalize_roots
 from app.services.persistence import (
     DEFAULT_APP_CONFIG,
     DEFAULT_MODULES,
@@ -141,6 +142,12 @@ async def put_all_settings(
         principal.require("settings_modules", "full")
         current_modules = await get_modules(db)
         merged_modules = deep_merge(current_modules, body.modules)
+        files_in = body.modules.get("files")
+        if isinstance(files_in, dict) and "roots" in files_in:
+            try:
+                merged_modules.setdefault("files", {})["roots"] = normalize_roots(files_in.get("roots"))
+            except FileManError as exc:
+                raise HTTPException(status_code=400, detail=exc.message) from exc
         # Persist only the modules document (already merged with defaults on read)
         await set_setting(db, "modules", merged_modules)
 

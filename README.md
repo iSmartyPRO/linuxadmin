@@ -15,6 +15,7 @@ Web-based administration panel for a Linux host: live system metrics, historical
 | **Docker** | Containers with live CPU, memory, network/block I/O, PIDs, and disk usage |
 | **Network** | Listening / established sockets, interfaces; optional iface up/down & process kill |
 | **Disks** | Partitions, I/O, safe browse under mount points |
+| **File Manager** | Mount named folders: tree + explorer, preview PDF / images / Markdown, edit text, upload, rename, move, delete |
 | **Users / Services** | Local accounts & systemd units (mutations optional) |
 | **PostgreSQL** | Connections, cache hit, activity, statements, tables, locks, replication |
 | **SSH Tunnel** | Jump-host users (`nologin`), keys / BYOK, `permitopen` destinations, live sessions (duration + TCP traffic), history, client ZIP pack |

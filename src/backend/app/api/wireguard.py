@@ -30,8 +30,9 @@ class ServerBody(BaseModel):
 class PeerCreateBody(BaseModel):
     name: str = Field(min_length=1, max_length=32)
     address: Optional[str] = Field(default=None, max_length=64)
-    route_mode: str = Field(default="full")
+    route_mode: str = Field(default="vpn_only")
     allowed_ips_client: Optional[List[str]] = None
+    dns_mode: Optional[str] = Field(default="none", max_length=16)
     dns: Optional[str] = Field(default=None, max_length=256)
     persistent_keepalive: int = Field(default=25, ge=0, le=600)
     use_preshared_key: bool = True
@@ -44,6 +45,7 @@ class PeerUpdateBody(BaseModel):
     address: Optional[str] = Field(default=None, max_length=64)
     route_mode: Optional[str] = None
     allowed_ips_client: Optional[List[str]] = None
+    dns_mode: Optional[str] = Field(default=None, max_length=16)
     dns: Optional[str] = Field(default=None, max_length=256)
     persistent_keepalive: Optional[int] = Field(default=None, ge=0, le=600)
     enabled: Optional[bool] = None

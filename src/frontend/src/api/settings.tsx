@@ -25,6 +25,7 @@ export type ModuleKey =
   | 'wireguard'
   | 'openvpn'
   | 'nginx'
+  | 'files'
   | 'settings'
 
 export type ModulesConfig = Record<string, Record<string, any>>
@@ -43,7 +44,6 @@ const DEFAULT_MODULES: ModulesConfig = {
   overview: {
     enabled: true,
     live_metrics: true,
-    status_cards: true,
     gauges: true,
     charts: true,
     disks: true,
@@ -116,6 +116,11 @@ const DEFAULT_MODULES: ModulesConfig = {
     allow_install: true,
     interface: 'wg0',
     default_listen_port: 51820,
+    show_live_peers: true,
+    show_ip_map: true,
+    record_history: false,
+    history_interval_seconds: 30,
+    online_handshake_seconds: 180,
   },
   openvpn: {
     enabled: true,
@@ -132,6 +137,14 @@ const DEFAULT_MODULES: ModulesConfig = {
     acme_environment: 'production',
     renew_days_before: 30,
     log_lines: 120,
+  },
+  files: {
+    enabled: true,
+    allow_mutations: false,
+    show_hidden: false,
+    max_preview_mb: 2,
+    max_upload_mb: 50,
+    roots: [],
   },
 }
 

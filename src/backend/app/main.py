@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.api import access, auth, disks, docker, history, network, nginx, openvpn, postgres, security, services, setup, ssh_tunnel, system, users, wireguard
+from app.api import access, auth, disks, docker, files, history, network, nginx, openvpn, postgres, security, services, setup, ssh_tunnel, system, users, wireguard
 from app.api import settings as settings_api
 from app.core.config import get_settings
 from app.core.db import AsyncSessionLocal, configure_engine, init_db
@@ -34,7 +34,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "default-src 'self'; "
             "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; "
+            "img-src 'self' data: blob:; "
+            "media-src 'self' blob:; "
+            "frame-src 'self' blob:; "
+            "object-src 'self' blob:; "
             "font-src 'self' data:; "
             "connect-src 'self' ws: wss:; "
             "frame-ancestors 'none'; "
@@ -147,6 +150,7 @@ def create_app() -> FastAPI:
     app.include_router(wireguard.router)
     app.include_router(openvpn.router)
     app.include_router(nginx.router)
+    app.include_router(files.router)
     app.include_router(users.router)
     app.include_router(services.router)
     app.include_router(postgres.router)

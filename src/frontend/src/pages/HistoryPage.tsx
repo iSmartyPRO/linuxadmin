@@ -56,6 +56,28 @@ type SshConnRow = {
   bytes_recv_rate?: number | null
 }
 
+type WgSnapshotRow = {
+  recorded_at: string
+  online_count: number
+  peer_count: number
+}
+
+type WgConnRow = {
+  id: number
+  session_key: string
+  peer_name: string
+  vpn_address?: string | null
+  remote_ip?: string | null
+  remote_port?: number | null
+  remote?: string | null
+  status: string
+  started_at: string
+  ended_at?: string | null
+  duration_seconds?: number | null
+  transfer_rx?: number | null
+  transfer_tx?: number | null
+}
+
 type MetricDef = {
   value: string
   label: string
@@ -635,17 +657,184 @@ function SshTunnelHistoryTab({ range }: { range: [Dayjs, Dayjs] }) {
   )
 }
 
+function WireGuardHistoryTab({ range }: { range: [Dayjs, Dayjs] }) {
+  const [snapshots, setSnapshots] = useState<WgSnapshotRow[]>([])
+  const [conns, setConns] = useState<WgConnRow[]>([])
+  const [loading, setLoading] = useState(false)
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    const from = range[0].toISOString()
+    const to = range[1].toISOString()
+    setLoading(true)
+    const statusQ = statusFilter ? `&status=${encodeURIComponent(statusFilter)}` : ''
+    void Promise.all([
+      api<WgSnapshotRow[]>(
+        `/api/history/wireguard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=5000`,
+      ).catch(() => [] as WgSnapshotRow[]),
+      api<WgConnRow[]>(
+        `/api/history/wireguard/connections?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=1000${statusQ}`,
+      ).catch(() => [] as WgConnRow[]),
+    ])
+      .then(([snap, events]) => {
+        setSnapshots(snap)
+        setConns(events)
+      })
+      .finally(() => setLoading(false))
+  }, [range, statusFilter])
+
+  const chartData = useMemo(
+    () =>
+      snapshots.map((r) => ({
+        time: dayjs(r.recorded_at).format('DD.MM HH:mm:ss'),
+        ts: dayjs(r.recorded_at).valueOf(),
+        online_count: Number(r.online_count ?? 0),
+        peer_count: Number(r.peer_count ?? 0),
+      })),
+    [snapshots],
+  )
+
+  const series: SeriesDef[] = [
+    {
+      key: 'online_count',
+      label: 'Online peers',
+      color: '#0d9488',
+      formatValue: (v) => String(Math.round(v)),
+    },
+    {
+      key: 'peer_count',
+      label: 'Configured peers',
+      color: '#0284c7',
+      formatValue: (v) => String(Math.round(v)),
+    },
+  ]
+
+  return (
+    <>
+      <Panel
+        title="Online peers"
+        extra={
+          <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>
+            {loading ? 'loading…' : `${snapshots.length} points`}
+          </Typography.Text>
+        }
+      >
+        {chartData.length ? (
+          <PremiumAreaChart data={chartData} series={series} height={280} brush />
+        ) : (
+          <Typography.Text type="secondary">
+            No snapshots for this period. Enable “Write connection history” for WireGuard in Settings.
+          </Typography.Text>
+        )}
+      </Panel>
+
+      <Panel
+        title="Connection log"
+        style={{ marginTop: 16 }}
+        extra={
+          <Select
+            allowClear
+            placeholder="Status"
+            style={{ width: 140 }}
+            value={statusFilter}
+            onChange={(v) => setStatusFilter(v)}
+            options={[
+              { value: 'active', label: 'active' },
+              { value: 'closed', label: 'closed' },
+            ]}
+          />
+        }
+      >
+        <Table
+          size="small"
+          rowKey="id"
+          loading={loading}
+          dataSource={conns}
+          pagination={tablePagination(25)}
+          locale={{ emptyText: 'No connection records for this period' }}
+          columns={[
+            {
+              title: 'Status',
+              dataIndex: 'status',
+              width: 100,
+              render: (v: string) => (
+                <Tag color={v === 'active' ? 'success' : 'default'}>{v}</Tag>
+              ),
+            },
+            {
+              title: 'Peer',
+              dataIndex: 'peer_name',
+              render: (v: string) => <span className="mono">{v}</span>,
+            },
+            {
+              title: 'VPN IP',
+              dataIndex: 'vpn_address',
+              render: (v?: string | null) => <span className="mono">{v || '—'}</span>,
+            },
+            {
+              title: 'Endpoint',
+              dataIndex: 'remote',
+              render: (_: unknown, r: WgConnRow) => (
+                <span className="mono">{r.remote || r.remote_ip || '—'}</span>
+              ),
+            },
+            {
+              title: 'Start',
+              dataIndex: 'started_at',
+              render: (v: string) => (
+                <span className="mono" style={{ fontSize: 12 }}>
+                  {dayjs(v).format('DD.MM.YYYY HH:mm:ss')}
+                </span>
+              ),
+            },
+            {
+              title: 'End',
+              dataIndex: 'ended_at',
+              render: (v?: string | null) =>
+                v ? (
+                  <span className="mono" style={{ fontSize: 12 }}>
+                    {dayjs(v).format('DD.MM.YYYY HH:mm:ss')}
+                  </span>
+                ) : (
+                  '—'
+                ),
+            },
+            {
+              title: 'Duration',
+              dataIndex: 'duration_seconds',
+              width: 110,
+              render: (v?: number | null) =>
+                v != null ? <span className="mono">{formatDuration(v)}</span> : '—',
+            },
+            {
+              title: 'Transfer',
+              key: 'transfer',
+              width: 180,
+              render: (_: unknown, r: WgConnRow) => (
+                <span className="mono" style={{ fontSize: 12 }}>
+                  ↓ {formatBytes(r.transfer_rx)} · ↑ {formatBytes(r.transfer_tx)}
+                </span>
+              ),
+            },
+          ]}
+        />
+      </Panel>
+    </>
+  )
+}
+
 export function HistoryPage() {
   const { isModuleEnabled } = useAppSettings()
   const [range, setRange] = useState<[Dayjs, Dayjs]>([dayjs().subtract(6, 'hour'), dayjs()])
   const showSsh = isModuleEnabled('ssh_tunnel')
+  const showWg = isModuleEnabled('wireguard')
 
   return (
     <div className="la-page">
       <PageHeader
         docsKey="history"
         title="History"
-        subtitle="System metrics and SSH Tunnel connection log for the selected period."
+        subtitle="System metrics, SSH Tunnel and WireGuard connection logs for the selected period."
         extra={
           <Space wrap>
             {PRESETS.map((p) => (
@@ -682,6 +871,15 @@ export function HistoryPage() {
                   key: 'ssh',
                   label: 'SSH Tunnel',
                   children: <SshTunnelHistoryTab range={range} />,
+                },
+              ]
+            : []),
+          ...(showWg
+            ? [
+                {
+                  key: 'wireguard',
+                  label: 'WireGuard',
+                  children: <WireGuardHistoryTab range={range} />,
                 },
               ]
             : []),

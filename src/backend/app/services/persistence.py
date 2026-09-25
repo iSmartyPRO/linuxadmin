@@ -11,6 +11,7 @@ from app.collectors import postgres as pg_collector
 from app.collectors import ssh_tunnel as ssh_tunnel_collector
 from app.collectors.system import collect_system_metrics
 from app.core.config import get_settings
+from app.collectors import wireguard as wireguard_collector
 from app.models import (
     AppSetting,
     MetricSnapshot,
@@ -18,6 +19,8 @@ from app.models import (
     SshConnectionEvent,
     SshTunnelSnapshot,
     User,
+    WireGuardConnectionEvent,
+    WireGuardSnapshot,
 )
 from app.core.auth import hash_password
 
@@ -49,7 +52,6 @@ DEFAULT_MODULES = {
     "overview": {
         "enabled": True,
         "live_metrics": True,
-        "status_cards": True,
         "gauges": True,
         "charts": True,
         "disks": True,
@@ -142,6 +144,12 @@ DEFAULT_MODULES = {
         "default_listen_port": 51820,
         "default_dns": "1.1.1.1, 8.8.8.8",
         "endpoint_host": "",
+        # Monitoring / load controls
+        "show_live_peers": True,  # parse wg dump + show online panel (cheap)
+        "show_ip_map": True,  # phpIPAM-style address grid on the page
+        "record_history": False,  # opt-in: write connect/disconnect archive to DB
+        "history_interval_seconds": 30,
+        "online_handshake_seconds": 180,  # peer considered online if handshake newer than this
     },
     "openvpn": {
         "enabled": True,
@@ -169,6 +177,14 @@ DEFAULT_MODULES = {
         "acme_directory_url": "",
         "renew_days_before": 30,
         "log_lines": 120,
+    },
+    "files": {
+        "enabled": True,
+        "allow_mutations": False,
+        "show_hidden": False,
+        "max_preview_mb": 2,
+        "max_upload_mb": 50,
+        "roots": [],
     },
 }
 
@@ -440,6 +456,113 @@ async def persist_ssh_tunnel_history(session: AsyncSession) -> None:
     await session.commit()
 
 
+async def persist_wireguard_history(session: AsyncSession) -> None:
+    """Snapshot online peer counts + open/close events from handshake freshness."""
+    modules = await get_modules(session)
+    wg_mod = modules.get("wireguard", {})
+    if not wg_mod.get("enabled", True) or not wg_mod.get("record_history", False):
+        return
+
+    data = await wireguard_collector.collect_live_peers(wg_mod)
+    if not data.get("available"):
+        return
+
+    now = datetime.now(timezone.utc)
+    online_peers = data.get("online_peers") or [
+        p for p in (data.get("peers") or []) if p.get("online")
+    ]
+    session.add(
+        WireGuardSnapshot(
+            recorded_at=now,
+            online_count=int(data.get("online_count") or len(online_peers)),
+            peer_count=int(data.get("peer_count") or 0),
+            payload={
+                "interface": data.get("interface"),
+                "peers": [
+                    {
+                        "name": p.get("name"),
+                        "public_key": p.get("public_key"),
+                        "remote_ip": p.get("remote_ip"),
+                        "vpn_address": p.get("address"),
+                        "transfer_rx": p.get("transfer_rx"),
+                        "transfer_tx": p.get("transfer_tx"),
+                    }
+                    for p in online_peers
+                ],
+            },
+        )
+    )
+
+    live_keys = {str(p.get("public_key")) for p in online_peers if p.get("public_key")}
+    open_q = await session.execute(
+        select(WireGuardConnectionEvent).where(WireGuardConnectionEvent.status == "active")
+    )
+    open_rows = list(open_q.scalars().all())
+    open_by_key = {r.session_key: r for r in open_rows}
+
+    for p in online_peers:
+        key = str(p.get("public_key") or "")
+        if not key:
+            continue
+        if key in open_by_key:
+            row = open_by_key[key]
+            row.peer_id = p.get("peer_id") or row.peer_id
+            row.peer_name = str(p.get("name") or row.peer_name)
+            row.vpn_address = p.get("address") or row.vpn_address
+            row.remote_ip = p.get("remote_ip")
+            row.remote_port = p.get("remote_port")
+            row.transfer_rx = p.get("transfer_rx")
+            row.transfer_tx = p.get("transfer_tx")
+            row.payload = p
+            try:
+                row.duration_seconds = max(0, int((now - row.started_at).total_seconds()))
+            except Exception:
+                pass
+            continue
+
+        handshake = p.get("latest_handshake")
+        started = now
+        if isinstance(handshake, (int, float)) and handshake > 0:
+            try:
+                started = datetime.fromtimestamp(int(handshake), tz=timezone.utc)
+            except Exception:
+                started = now
+        try:
+            duration = max(0, int((now - started).total_seconds()))
+        except Exception:
+            duration = None
+        session.add(
+            WireGuardConnectionEvent(
+                session_key=key,
+                peer_id=p.get("peer_id"),
+                peer_name=str(p.get("name") or key[:12]),
+                public_key=key,
+                vpn_address=p.get("address"),
+                remote_ip=p.get("remote_ip"),
+                remote_port=p.get("remote_port"),
+                status="active",
+                started_at=started,
+                ended_at=None,
+                duration_seconds=duration,
+                transfer_rx=p.get("transfer_rx"),
+                transfer_tx=p.get("transfer_tx"),
+                payload=p,
+            )
+        )
+
+    for key, row in open_by_key.items():
+        if key in live_keys:
+            continue
+        row.status = "closed"
+        row.ended_at = now
+        try:
+            row.duration_seconds = max(0, int((now - row.started_at).total_seconds()))
+        except Exception:
+            row.duration_seconds = None
+
+    await session.commit()
+
+
 async def cleanup_old_metrics(session: AsyncSession) -> None:
     app_cfg = await get_app_config(session)
     days = int(app_cfg.get("retention_days") or get_settings().retention_days)
@@ -448,4 +571,8 @@ async def cleanup_old_metrics(session: AsyncSession) -> None:
     await session.execute(delete(PgMetricSnapshot).where(PgMetricSnapshot.recorded_at < cutoff))
     await session.execute(delete(SshTunnelSnapshot).where(SshTunnelSnapshot.recorded_at < cutoff))
     await session.execute(delete(SshConnectionEvent).where(SshConnectionEvent.started_at < cutoff))
+    await session.execute(delete(WireGuardSnapshot).where(WireGuardSnapshot.recorded_at < cutoff))
+    await session.execute(
+        delete(WireGuardConnectionEvent).where(WireGuardConnectionEvent.started_at < cutoff)
+    )
     await session.commit()

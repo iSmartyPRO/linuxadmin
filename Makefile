@@ -13,11 +13,13 @@ ENV_FILE    := $(ROOT)/.env
 PID_FILE    := $(ROOT)/.run/lnxadmin.pid
 LOG_DIR     := $(ROOT)/.run/logs
 
-# Defaults (override on CLI: make start LNXADMIN_BIND_HOST=0.0.0.0)
-# Application secrets are loaded by pydantic from .env — do not include .env here.
+# Defaults — overridden by .env LNXADMIN_BIND_* (and by CLI: make start LNXADMIN_BIND_HOST=…)
+# Secrets stay in pydantic; only bind address/port are read here so `make restart` matches .env.
+_ENV_BIND_HOST := $(shell sed -n 's/^[[:space:]]*LNXADMIN_BIND_HOST[[:space:]]*=[[:space:]]*//p' "$(ENV_FILE)" 2>/dev/null | tail -1 | tr -d '"' | tr -d "'")
+_ENV_BIND_PORT := $(shell sed -n 's/^[[:space:]]*LNXADMIN_BIND_PORT[[:space:]]*=[[:space:]]*//p' "$(ENV_FILE)" 2>/dev/null | tail -1 | tr -d '"' | tr -d "'")
 LNXADMIN_ENV        ?= development
-LNXADMIN_BIND_HOST  ?= 127.0.0.1
-LNXADMIN_BIND_PORT  ?= 8000
+LNXADMIN_BIND_HOST  ?= $(if $(_ENV_BIND_HOST),$(_ENV_BIND_HOST),127.0.0.1)
+LNXADMIN_BIND_PORT  ?= $(if $(_ENV_BIND_PORT),$(_ENV_BIND_PORT),8000)
 
 .PHONY: help env install install-backend install-frontend build migrate \
 	dev dev-backend dev-frontend run start stop status restart check \

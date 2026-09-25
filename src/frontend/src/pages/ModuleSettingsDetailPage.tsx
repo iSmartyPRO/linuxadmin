@@ -14,12 +14,13 @@ import {
   Typography,
   message,
 } from 'antd'
-import { ArrowLeftOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, FolderOpenOutlined } from '@ant-design/icons'
 import { api } from '../api/client'
 import { useAppSettings } from '../api/settings'
 import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
 import { getModuleMeta } from '../settings/moduleCatalog'
+import { FolderPicker } from '../components/FolderPicker'
 
 type PostgresSettings = {
   enabled: boolean
@@ -191,7 +192,7 @@ export function ModuleSettingsDetailPage() {
       await refresh()
       message.success('Saved')
     } catch (e) {
-      message.error(String(e))
+      message.error(settingError(e))
     } finally {
       setSaving(false)
     }
@@ -379,6 +380,127 @@ export function ModuleSettingsDetailPage() {
   )
 }
 
+function settingError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e)
+  try {
+    const parsed = JSON.parse(raw) as { detail?: unknown }
+    if (typeof parsed.detail === 'string') return parsed.detail
+  } catch {
+    /* plain text */
+  }
+  return raw
+}
+
+type MountDraft = { id: string; name: string; path: string; read_only?: boolean }
+
+function FilesMountEditor({
+  mod,
+  patch,
+}: {
+  mod: Record<string, any>
+  patch: (p: Record<string, any>) => void
+}) {
+  const roots: MountDraft[] = Array.isArray(mod.roots) ? mod.roots : []
+  const [checking, setChecking] = useState<number | null>(null)
+  const [picker, setPicker] = useState<number | null>(null)
+  const update = (next: MountDraft[]) => patch({ roots: next })
+
+  const check = async (index: number) => {
+    const row = roots[index]
+    if (!row) return
+    setChecking(index)
+    try {
+      const res = await api<{ ok: boolean; path?: string; name?: string; error?: string }>('/api/files/check-path', {
+        method: 'POST',
+        body: JSON.stringify({ path: row.path }),
+      })
+      if (!res.ok || !res.path) {
+        message.error(res.error || 'Path is not available')
+        return
+      }
+      update(roots.map((item, i) => (i === index ? { ...item, path: res.path || item.path, name: item.name || res.name || item.name } : item)))
+      message.success('Folder is available')
+    } catch (e) {
+      message.error(settingError(e))
+    } finally {
+      setChecking(null)
+    }
+  }
+
+  return (
+    <>
+      <FineSwitch label="Allow changes (create, upload, edit, rename, move, delete)" checked={!!mod.allow_mutations} onChange={(v) => patch({ allow_mutations: v })} />
+      <FineSwitch label="Show hidden files by default" checked={!!mod.show_hidden} onChange={(v) => patch({ show_hidden: v })} />
+      <NumberRow label="Preview limit (MB)" value={mod.max_preview_mb ?? 2} min={1} max={8} onChange={(v) => patch({ max_preview_mb: v || 2 })} />
+      <NumberRow label="Upload limit (MB)" value={mod.max_upload_mb ?? 50} min={1} max={200} onChange={(v) => patch({ max_upload_mb: v || 50 })} />
+      <Typography.Paragraph type="secondary" style={{ marginTop: 14 }}>
+        Mounted folders show up in the sidebar under Files, each with the name you set. Paths stay jailed: links that leave the folder are blocked. The filesystem root and /proc, /sys, /dev, /run, /boot cannot be mounted.
+      </Typography.Paragraph>
+      {roots.map((root, index) => (
+        <div key={root.id || index} className="fm-root-card">
+          <Input
+            placeholder="Menu name"
+            value={root.name}
+            onChange={(e) => update(roots.map((item, i) => (i === index ? { ...item, name: e.target.value } : item)))}
+          />
+          <div className="fm-path-row">
+            <Input
+              className="mono"
+              placeholder="/var/lib/documents"
+              value={root.path}
+              onChange={(e) => update(roots.map((item, i) => (i === index ? { ...item, path: e.target.value } : item)))}
+            />
+            <Button icon={<FolderOpenOutlined />} onClick={() => setPicker(index)}>
+              Browse
+            </Button>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 13 }}>Read only</span>
+            <Switch checked={!!root.read_only} onChange={(v) => update(roots.map((item, i) => (i === index ? { ...item, read_only: v } : item)))} />
+          </div>
+          <Space>
+            <Button size="small" loading={checking === index} onClick={() => void check(index)}>
+              Check path
+            </Button>
+            <Button size="small" danger onClick={() => update(roots.filter((_, i) => i !== index))}>
+              Remove
+            </Button>
+          </Space>
+        </div>
+      ))}
+      <Button
+        onClick={() =>
+          update([
+            ...roots,
+            {
+              id: crypto.randomUUID().replace(/-/g, '').slice(0, 12),
+              name: '',
+              path: '',
+              read_only: false,
+            },
+          ])
+        }
+      >
+        Add folder
+      </Button>
+      <FolderPicker
+        open={picker !== null}
+        initialPath={picker !== null ? roots[picker]?.path : ''}
+        onClose={() => setPicker(null)}
+        onSelect={(selected, name) => {
+          if (picker === null) return
+          update(
+            roots.map((item, i) =>
+              i === picker ? { ...item, path: selected, name: item.name || name } : item,
+            ),
+          )
+          setPicker(null)
+        }}
+      />
+    </>
+  )
+}
+
 function ModuleOptionsFields({
   moduleKey,
   mod,
@@ -393,7 +515,6 @@ function ModuleOptionsFields({
       return (
         <>
           <FineSwitch label="Live WebSocket metrics" checked={!!mod.live_metrics} onChange={(v) => patch({ live_metrics: v })} />
-          <FineSwitch label="Status cards" checked={!!mod.status_cards} onChange={(v) => patch({ status_cards: v })} />
           <FineSwitch label="Gauges CPU / RAM / Swap / Disk" checked={!!mod.gauges} onChange={(v) => patch({ gauges: v })} />
           <FineSwitch label="CPU/RAM and network charts" checked={!!mod.charts} onChange={(v) => patch({ charts: v })} />
           <FineSwitch label="Disks" checked={!!mod.disks} onChange={(v) => patch({ disks: v })} />
@@ -501,6 +622,35 @@ function ModuleOptionsFields({
         <>
           <FineSwitch label="Allow changes (install tools / wg-quick / peers)" checked={!!mod.allow_mutations} onChange={(v) => patch({ allow_mutations: v })} />
           <FineSwitch label="Allow package install (apt/dnf/…)" checked={mod.allow_install !== false} onChange={(v) => patch({ allow_install: v })} />
+          <FineSwitch
+            label="Show live peer connections (wg dump)"
+            checked={mod.show_live_peers !== false}
+            onChange={(v) => patch({ show_live_peers: v })}
+          />
+          <FineSwitch
+            label="Show IP address map"
+            checked={mod.show_ip_map !== false}
+            onChange={(v) => patch({ show_ip_map: v })}
+          />
+          <FineSwitch
+            label="Write connection history to DB (opt-in, extra load)"
+            checked={!!mod.record_history}
+            onChange={(v) => patch({ record_history: v })}
+          />
+          <NumberRow
+            label="History poll interval (seconds)"
+            value={mod.history_interval_seconds ?? 30}
+            min={10}
+            max={600}
+            onChange={(v) => patch({ history_interval_seconds: v || 30 })}
+          />
+          <NumberRow
+            label="Online if handshake newer than (seconds)"
+            value={mod.online_handshake_seconds ?? 180}
+            min={30}
+            max={3600}
+            onChange={(v) => patch({ online_handshake_seconds: v || 180 })}
+          />
           <TextRow label="Interface" value={mod.interface ?? 'wg0'} mono onChange={(v) => patch({ interface: v })} />
           <TextRow label="Public endpoint host" value={mod.endpoint_host ?? ''} placeholder="auto FQDN / IP" onChange={(v) => patch({ endpoint_host: v })} />
           <NumberRow label="Listen port" value={mod.default_listen_port ?? 51820} min={1} max={65535} onChange={(v) => patch({ default_listen_port: v || 51820 })} />
@@ -527,6 +677,8 @@ function ModuleOptionsFields({
           <NumberRow label="Log lines" value={mod.log_lines ?? 120} min={20} max={2000} onChange={(v) => patch({ log_lines: v || 120 })} />
         </>
       )
+    case 'files':
+      return <FilesMountEditor mod={mod} patch={patch} />
     default:
       return <Typography.Text type="secondary">No extra options for this module.</Typography.Text>
   }

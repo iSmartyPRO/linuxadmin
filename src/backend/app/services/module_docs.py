@@ -200,6 +200,32 @@ OpenVPN server with local PKI, CCD routes, and client `.ovpn` profiles.
 - **Full** — install, apply/stop, manage clients (`allow_mutations`)
 """,
     },
+    "files": {
+        "title": "File Manager",
+        "summary": "Mounted folders with a tree, explorer, and inline preview for PDF, images, and Markdown.",
+        "body": """
+## What it is
+A jailed file browser. In **Settings → Modules → File Manager** you mount one or more directories. Each mount appears in the sidebar under **Files** by the name you give it. Browsing, preview, and edits stay inside that directory — symbolic links that point outside are refused.
+
+## Capabilities
+- Tree of folders plus an icon grid or detail list
+- Preview images, PDF, audio, and video; read and edit Markdown and text in place
+- Create files and folders, upload, rename, move (including drag-and-drop), and delete
+- Per-folder read-only flag
+
+## Settings
+- **Allow changes** — required before create, upload, edit, rename, move, or delete
+- **Show hidden files** — names starting with `.`
+- **Mounted folders** — display name, absolute path (Browse from `/`), optional read-only
+- Preview and upload size limits
+
+The filesystem root and kernel trees (`/proc`, `/sys`, `/dev`, `/run`, `/boot`) cannot be mounted.
+
+## Permissions
+- **Read** — browse and preview
+- **Full** — change files (also requires `allow_mutations`, and the folder must not be read-only)
+""",
+    },
     "nginx": {
         "title": "Nginx Edge Proxy",
         "summary": "HTTP/HTTPS/TCP/UDP reverse proxy, TLS passthrough, certificates, Let's Encrypt, route templates.",
@@ -358,6 +384,8 @@ Every module endpoint requires at least **read**. Mutations (POST/PUT/DELETE tha
 | GET | `/api/wireguard/overview` | WireGuard status |
 | GET | `/api/openvpn/overview` | OpenVPN status |
 | GET | `/api/security/fail2ban` | Fail2ban status |
+| GET | `/api/files/roots` | File Manager mounts |
+| GET | `/api/files/list` | List a directory inside a mount |
 | POST | `/api/security/fail2ban/install` | Install Fail2ban package |
 | WS | `/ws/metrics` | Send `{"type":"auth","token":"<jwt>"}` first (API keys not for WS) |
 

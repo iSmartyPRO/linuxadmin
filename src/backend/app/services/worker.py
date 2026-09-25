@@ -15,6 +15,7 @@ from app.services.persistence import (
     persist_pg_snapshots,
     persist_ssh_tunnel_history,
     persist_system_snapshot,
+    persist_wireguard_history,
     DEFAULT_PG_SETTINGS,
 )
 from app.services.ws_hub import metrics_hub
@@ -53,6 +54,7 @@ class BackgroundWorker:
         last_history = 0.0
         last_pg = 0.0
         last_ssh = 0.0
+        last_wg = 0.0
         last_cleanup = 0.0
         last_cfg_refresh = 0.0
         metrics_interval = float(env.metrics_interval)
@@ -100,6 +102,16 @@ class BackgroundWorker:
                     ):
                         await persist_ssh_tunnel_history(session)
                         last_ssh = started
+
+                    wg_mod = modules.get("wireguard", {})
+                    wg_interval = float(wg_mod.get("history_interval_seconds") or 30)
+                    if (
+                        wg_mod.get("enabled", True)
+                        and wg_mod.get("record_history", False)
+                        and started - last_wg >= wg_interval
+                    ):
+                        await persist_wireguard_history(session)
+                        last_wg = started
 
                     if started - last_cleanup >= 3600:
                         await cleanup_old_metrics(session)

@@ -1,4 +1,5 @@
-import { Layout, Menu, Button, Typography, Switch, Tooltip, Spin } from 'antd'
+import { useEffect, useState } from 'react'
+import { Layout, Menu, Button, Typography, Switch, Tooltip, Spin, type MenuProps } from 'antd'
 import {
   DashboardOutlined,
   HistoryOutlined,
@@ -18,6 +19,8 @@ import {
   SafetyOutlined,
   LockOutlined,
   GlobalOutlined,
+  FolderOutlined,
+  FolderOpenOutlined,
 } from '@ant-design/icons'
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../api/auth'
@@ -136,10 +139,20 @@ const MENU: Array<{
 
 export function AppLayout({ dark, onToggleTheme }: Props) {
   const { username, logout } = useAuth()
-  const { loading, appName, hostname, isModuleEnabled } = useAppSettings()
+  const { loading, appName, hostname, isModuleEnabled, modules } = useAppSettings()
   const { loading: accessLoading, can, profile } = useAccess()
   const location = useLocation()
-  const selected = '/' + (location.pathname.split('/')[1] || '')
+  const path = location.pathname
+  const onFiles = path === '/files' || path.startsWith('/files/')
+  const selected = path.startsWith('/files/') ? path : '/' + (path.split('/')[1] || '')
+  const [collapsed, setCollapsed] = useState(false)
+  const [openKeys, setOpenKeys] = useState<string[]>(['files-group'])
+
+  useEffect(() => {
+    if (onFiles) {
+      setOpenKeys((keys) => (keys.includes('files-group') ? keys : [...keys, 'files-group']))
+    }
+  }, [onFiles])
 
   const items = MENU.filter((item) => {
     if (item.key === '/settings') {
@@ -152,6 +165,33 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
     icon: item.icon,
     label: <Link to={item.to}>{item.label}</Link>,
   }))
+
+  const menuItems: MenuProps['items'] = (() => {
+    const settings = items.filter((item) => item.key === '/settings')
+    const rest = items.filter((item) => item.key !== '/settings')
+    if (!isModuleEnabled('files') || !can('files', 'read')) return [...rest, ...settings]
+    const mounts = (Array.isArray(modules.files?.roots) ? modules.files.roots : []) as Array<{ id?: string; name?: string }>
+    const children = mounts
+      .filter((root) => root.id && root.name)
+      .map((root) => ({
+        key: `/files/${root.id}`,
+        icon: <FolderOpenOutlined />,
+        label: <Link to={`/files/${root.id}`}>{root.name}</Link>,
+      }))
+    const filesItem: NonNullable<MenuProps['items']>[number] = children.length
+      ? {
+          key: 'files-group',
+          icon: <FolderOutlined />,
+          label: 'Files',
+          children,
+        }
+      : {
+          key: '/files',
+          icon: <FolderOutlined />,
+          label: <Link to="/files">Files</Link>,
+        }
+    return [...rest, filesItem, ...settings]
+  })()
 
   // If current route's module is disabled / forbidden, bounce home
   const current = MENU.find((m) => m.key === (selected === '/' ? '/' : selected))
@@ -168,6 +208,7 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
         breakpoint="lg"
         collapsedWidth={72}
         width={248}
+        onCollapse={setCollapsed}
         style={{
           background: 'var(--la-sider)',
           borderRight: '1px solid var(--la-panel-border)',
@@ -210,7 +251,8 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
           <Menu
             mode="inline"
             selectedKeys={[selected === '/' ? '/' : selected]}
-            items={items}
+            {...(collapsed ? {} : { openKeys, onOpenChange: (keys: string[]) => setOpenKeys(keys) })}
+            items={menuItems}
           />
         )}
 

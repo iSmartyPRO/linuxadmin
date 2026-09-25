@@ -23,6 +23,7 @@ import { NginxPage } from './pages/NginxPage'
 import { UsersPage } from './pages/UsersPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { PostgresPage } from './pages/PostgresPage'
+import { FileManagerPage } from './pages/FileManagerPage'
 import { ModuleSettingsDetailPage } from './pages/ModuleSettingsDetailPage'
 import {
   SettingsAccessPage,
@@ -214,6 +215,22 @@ function Shell() {
               element={
                 <ModuleGate module="postgres">
                   <PostgresPage />
+                </ModuleGate>
+              }
+            />
+            <Route
+              path="files"
+              element={
+                <ModuleGate module="files">
+                  <FileManagerPage />
+                </ModuleGate>
+              }
+            />
+            <Route
+              path="files/:rootId"
+              element={
+                <ModuleGate module="files">
+                  <FileManagerPage />
                 </ModuleGate>
               }
             />

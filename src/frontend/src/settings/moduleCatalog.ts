@@ -13,6 +13,7 @@ export type ModuleSettingKey =
   | 'wireguard'
   | 'openvpn'
   | 'nginx'
+  | 'files'
 
 export type ModuleCatalogItem = {
   key: ModuleSettingKey
@@ -105,6 +106,12 @@ export const MODULE_CATALOG: ModuleCatalogItem[] = [
     title: 'Nginx Edge',
     description: 'Reverse proxy, TLS/SNI, LE certs, templates (Carbonio, Nextcloud, …)',
     group: 'Edge / Proxy',
+  },
+  {
+    key: 'files',
+    title: 'File Manager',
+    description: 'Mounted folders: tree, explorer, preview and edit',
+    group: 'Runtime',
   },
 ]
 
