@@ -14,6 +14,7 @@ export type ModuleSettingKey =
   | 'openvpn'
   | 'nginx'
   | 'files'
+  | 'speedtest'
 
 export type ModuleCatalogItem = {
   key: ModuleSettingKey
@@ -111,6 +112,12 @@ export const MODULE_CATALOG: ModuleCatalogItem[] = [
     key: 'files',
     title: 'File Manager',
     description: 'Mounted folders: tree, explorer, preview and edit',
+    group: 'Runtime',
+  },
+  {
+    key: 'speedtest',
+    title: 'Speedtest',
+    description: 'Speedtest.net-style throughput test and live iperf3 client/server',
     group: 'Runtime',
   },
 ]

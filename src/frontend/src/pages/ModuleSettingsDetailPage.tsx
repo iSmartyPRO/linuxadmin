@@ -679,6 +679,17 @@ function ModuleOptionsFields({
       )
     case 'files':
       return <FilesMountEditor mod={mod} patch={patch} />
+    case 'speedtest':
+      return (
+        <>
+          <FineSwitch label="Allow Host ↔ Internet test (Cloudflare edge)" checked={mod.allow_internet_test !== false} onChange={(v) => patch({ allow_internet_test: v })} />
+          <FineSwitch label="Allow iperf3 client / server" checked={mod.allow_iperf !== false} onChange={(v) => patch({ allow_iperf: v })} />
+          <FineSwitch label="Allow package install (iperf3 via apt/dnf/…)" checked={mod.allow_install !== false} onChange={(v) => patch({ allow_install: v })} />
+          <NumberRow label="Max test duration (sec)" value={mod.max_duration_seconds ?? 60} min={5} max={3600} onChange={(v) => patch({ max_duration_seconds: v || 60 })} />
+          <NumberRow label="Max parallel iperf3 streams" value={mod.max_parallel ?? 32} min={1} max={128} onChange={(v) => patch({ max_parallel: v || 32 })} />
+          <NumberRow label="History size (results kept)" value={mod.history_size ?? 200} min={10} max={5000} onChange={(v) => patch({ history_size: v || 200 })} />
+        </>
+      )
     default:
       return <Typography.Text type="secondary">No extra options for this module.</Typography.Text>
   }

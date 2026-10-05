@@ -24,6 +24,7 @@ import { UsersPage } from './pages/UsersPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { PostgresPage } from './pages/PostgresPage'
 import { FileManagerPage } from './pages/FileManagerPage'
+import { SpeedtestPage } from './pages/SpeedtestPage'
 import { ModuleSettingsDetailPage } from './pages/ModuleSettingsDetailPage'
 import {
   SettingsAccessPage,
@@ -215,6 +216,14 @@ function Shell() {
               element={
                 <ModuleGate module="postgres">
                   <PostgresPage />
+                </ModuleGate>
+              }
+            />
+            <Route
+              path="speedtest"
+              element={
+                <ModuleGate module="speedtest">
+                  <SpeedtestPage />
                 </ModuleGate>
               }
             />

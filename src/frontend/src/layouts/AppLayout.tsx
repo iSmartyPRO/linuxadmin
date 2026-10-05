@@ -21,6 +21,7 @@ import {
   GlobalOutlined,
   FolderOutlined,
   FolderOpenOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../api/auth'
@@ -77,6 +78,13 @@ const MENU: Array<{
     icon: <ApiOutlined />,
     label: 'Network',
     to: '/network',
+  },
+  {
+    key: '/speedtest',
+    module: 'speedtest',
+    icon: <ThunderboltOutlined />,
+    label: 'Speedtest',
+    to: '/speedtest',
   },
   {
     key: '/disks',

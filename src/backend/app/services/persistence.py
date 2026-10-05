@@ -186,6 +186,16 @@ DEFAULT_MODULES = {
         "max_upload_mb": 50,
         "roots": [],
     },
+    "speedtest": {
+        "enabled": True,
+        "allow_internet_test": True,
+        "allow_iperf": True,
+        "allow_install": True,
+        "max_duration_seconds": 60,
+        "max_parallel": 32,
+        "history_size": 200,
+        "data_dir": "/var/lib/lnxadmin/speedtest",
+    },
 }
 
 

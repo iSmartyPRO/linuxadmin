@@ -26,6 +26,7 @@ export type ModuleKey =
   | 'openvpn'
   | 'nginx'
   | 'files'
+  | 'speedtest'
   | 'settings'
 
 export type ModulesConfig = Record<string, Record<string, any>>
@@ -145,6 +146,15 @@ const DEFAULT_MODULES: ModulesConfig = {
     max_preview_mb: 2,
     max_upload_mb: 50,
     roots: [],
+  },
+  speedtest: {
+    enabled: true,
+    allow_internet_test: true,
+    allow_iperf: true,
+    allow_install: true,
+    max_duration_seconds: 60,
+    max_parallel: 32,
+    history_size: 200,
   },
 }
 

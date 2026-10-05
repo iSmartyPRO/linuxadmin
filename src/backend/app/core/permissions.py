@@ -24,6 +24,7 @@ ACCESS_MODULES: list[dict[str, str]] = [
     {"key": "openvpn", "label": "OpenVPN", "group": "VPN / Access"},
     {"key": "nginx", "label": "Nginx Edge", "group": "Edge / Proxy"},
     {"key": "files", "label": "File Manager", "group": "Runtime"},
+    {"key": "speedtest", "label": "Speedtest", "group": "Runtime"},
     {"key": "settings", "label": "Settings (view)", "group": "Administration"},
     {"key": "settings_modules", "label": "Settings → Modules", "group": "Administration"},
     {"key": "settings_connection", "label": "Settings → Connection", "group": "Administration"},
@@ -82,6 +83,7 @@ def default_operator_permissions() -> dict[str, PermLevel]:
         "openvpn",
         "nginx",
         "files",
+        "speedtest",
     ):
         p[key] = "full"
     p["settings"] = "read"

@@ -226,6 +226,40 @@ The filesystem root and kernel trees (`/proc`, `/sys`, `/dev`, `/run`, `/boot`) 
 - **Full** — change files (also requires `allow_mutations`, and the folder must not be read-only)
 """,
     },
+    "speedtest": {
+        "title": "Speedtest",
+        "summary": "Speedtest.net-style throughput test (browser ↔ host, host ↔ Internet) and a live iperf3 client/server.",
+        "body": """
+## What it is
+Measure network speed with a live gauge and charts, the way speedtest.net does — plus a graphical front end for **iperf3**.
+
+## Modes
+- **Browser ↔ This host** — your browser downloads/uploads incompressible data from the panel over several parallel HTTP streams. Shows ping, jitter, download, upload, and latency under load. Runs entirely between you and this server.
+- **Host ↔ Internet** — the server itself measures its uplink against the nearest Cloudflare speed edge (`speed.cloudflare.com`). Shows the edge location, public IP and ASN.
+- **iperf3 client** — run `iperf3 -c` against any iperf3 server: TCP/UDP, upload / download (`-R`) / bidirectional, parallel streams, bitrate, window, MSS, congestion control, DSCP, IPv4/IPv6.
+- **iperf3 server** — start `iperf3 -s` on a chosen port and watch incoming tests live; each finished test is listed with its summary.
+- **History** — every finished test is stored (JSON under `data_dir`).
+
+## Defaults
+Defaults are tuned for a typical LAN/WAN: TCP, 4 parallel streams, 10 s, 0.5 s reporting interval, first second omitted (TCP slow start). UDP defaults to 100 Mbit/s. Use **Advanced** to fine-tune.
+
+## Installing iperf3
+When iperf3 is missing the page offers **Install iperf3** (apt/dnf/yum/apk/pacman/zypper). On Debian/Ubuntu the daemon prompt is answered “no” — the panel starts servers on demand.
+
+## Firewall
+For the iperf3 server, allow the chosen TCP **and** UDP port (default 5201) in the Firewall module.
+
+## Settings
+- **Allow Host ↔ Internet test**
+- **Allow iperf3** and **Allow package install**
+- **Max duration (s)** and **max parallel streams** for iperf3 / Internet tests
+- **History size**
+
+## Permissions
+- **Read** — browser ↔ host test, view jobs and history
+- **Full** — Internet test, iperf3 client/server, install iperf3, clear history
+""",
+    },
     "nginx": {
         "title": "Nginx Edge Proxy",
         "summary": "HTTP/HTTPS/TCP/UDP reverse proxy, TLS passthrough, certificates, Let's Encrypt, route templates.",
@@ -387,6 +421,8 @@ Every module endpoint requires at least **read**. Mutations (POST/PUT/DELETE tha
 | GET | `/api/files/roots` | File Manager mounts |
 | GET | `/api/files/list` | List a directory inside a mount |
 | POST | `/api/security/fail2ban/install` | Install Fail2ban package |
+| GET | `/api/speedtest/history` | Speedtest / iperf3 results |
+| POST | `/api/speedtest/iperf/client` | Start an iperf3 client test (poll `/api/speedtest/jobs/{id}`) |
 | WS | `/ws/metrics` | Send `{"type":"auth","token":"<jwt>"}` first (API keys not for WS) |
 
 ## Errors
