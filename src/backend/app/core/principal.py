@@ -93,17 +93,18 @@ def principal_from_user(
     else:
         role_perms = (user.role.permissions if user.role else {}) or {}
         perms = merge_permissions(role_perms)
-        if key_perms:
-            # API key may only narrow permissions, never expand
-            perms = {
-                k: _min_level(perms[k], normalize_level(key_perms[k])) if k in key_perms else perms[k]
-                for k in perms
-            }
+    if key_perms:
+        # API key may only narrow permissions, never expand — for a superadmin
+        # too, which is why a scoped key does not carry the superadmin bypass.
+        perms = {
+            k: _min_level(perms[k], normalize_level(key_perms[k])) if k in key_perms else perms[k]
+            for k in perms
+        }
     return Principal(
         user_id=user.id,
         username=user.username,
         display_name=user.display_name or "",
-        is_superadmin=bool(user.is_superadmin),
+        is_superadmin=bool(user.is_superadmin) and not key_perms,
         role_id=user.role_id,
         role_name=user.role.name if user.role else None,
         role_slug=user.role.slug if user.role else None,
