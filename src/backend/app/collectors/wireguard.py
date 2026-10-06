@@ -187,6 +187,15 @@ async def _gen_psk() -> str | None:
     return out.strip() if code == 0 else None
 
 
+async def _detect_wan_iface() -> str:
+    code, out, _ = await run_cmd(["ip", "route", "show", "default"])
+    if code == 0 and out:
+        m = re.search(r"\bdev\s+(\S+)", out)
+        if m:
+            return m.group(1)
+    return "eth0"
+
+
 def _detect_pkg_manager() -> str | None:
     for name in ("apt-get", "dnf", "yum", "apk", "pacman", "zypper"):
         if shutil.which(name):
