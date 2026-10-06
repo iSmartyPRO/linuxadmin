@@ -41,7 +41,7 @@ env: ## Create .env from .env.example if missing
 	@if [ -f "$(ENV_FILE)" ]; then \
 	  echo ".env already exists: $(ENV_FILE)"; \
 	else \
-	  cp "$(ROOT)/.env.example" "$(ENV_FILE)"; \
+	  cp "$(ROOT)/.env.example" "$(ENV_FILE)"; chmod 600 "$(ENV_FILE)"; \
 	  echo "Created $(ENV_FILE) — edit secrets before production use"; \
 	fi
 

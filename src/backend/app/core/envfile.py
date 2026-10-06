@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import stat
+import tempfile
 from pathlib import Path
 
 
@@ -46,9 +49,20 @@ def upsert_env_file(path: Path, updates: dict[str, str | int | bool]) -> None:
             out.append(f"{key}={value}")
 
     text = "\n".join(out).rstrip() + "\n"
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    # .env holds the DB password and JWT secret: keep its mode (0600 if new).
+    mode = stat.S_IMODE(path.stat().st_mode) if path.is_file() else 0o600
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            os.fchmod(fh.fileno(), mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _format_value(value: str | int | bool) -> str:

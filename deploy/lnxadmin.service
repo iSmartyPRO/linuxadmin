@@ -6,7 +6,9 @@ Wants=postgresql.service
 [Service]
 Type=simple
 WorkingDirectory=@ROOT@/src/backend
-EnvironmentFile=@ROOT@/.env
+# No EnvironmentFile: the app reads @ROOT@/.env itself. Loading it here would
+# turn the values into environment variables, which take precedence over the
+# file, so changes made by the setup wizard / Settings would be ignored.
 Environment=PYTHONPATH=.
 Environment=LNXADMIN_ENV=production
 ExecStart=@ROOT@/src/backend/.venv/bin/uvicorn app.main:app \
@@ -17,12 +19,11 @@ ExecStart=@ROOT@/src/backend/.venv/bin/uvicorn app.main:app \
   --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
 RestartSec=3
-# Hardening
+# Hardening. The panel manages the host as root (nginx/wireguard configs in
+# /etc, packages, users and their ~/.ssh), so ProtectSystem/ProtectHome would
+# make those modules fail with read-only filesystem errors.
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=@ROOT@/src/backend @ROOT@/.run /var/lib/lnxadmin
 # Uncomment if the service user must run passwordless sudo for mutations:
 # SupplementaryGroups=sudo
 
