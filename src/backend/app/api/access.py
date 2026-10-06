@@ -276,6 +276,8 @@ async def create_user(
     role = await db.get(Role, body.role_id)
     if not role:
         raise HTTPException(status_code=400, detail="Role not found")
+    if role.slug == "superadmin" and not principal.is_superadmin:
+        raise HTTPException(status_code=403, detail="Only Super Admin can assign this role")
     exists = await db.execute(select(User).where(User.username == username))
     if exists.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Username already exists")
@@ -309,6 +311,9 @@ async def update_user(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if user.is_superadmin and not principal.is_superadmin:
+        # Otherwise an operator could reset a Super Admin's password and log in as them.
+        raise HTTPException(status_code=403, detail="Only Super Admin can modify a Super Admin")
 
     if body.is_superadmin is not None:
         if body.is_superadmin and not principal.is_superadmin:
@@ -334,6 +339,8 @@ async def update_user(
         role = await db.get(Role, body.role_id)
         if not role:
             raise HTTPException(status_code=400, detail="Role not found")
+        if role.slug == "superadmin" and not principal.is_superadmin:
+            raise HTTPException(status_code=403, detail="Only Super Admin can assign this role")
         user.role_id = role.id
 
     await db.commit()
@@ -354,6 +361,8 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="User not found")
     if user.id == principal.user_id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    if user.is_superadmin and not principal.is_superadmin:
+        raise HTTPException(status_code=403, detail="Only Super Admin can delete a Super Admin")
     if user.is_superadmin and await _count_superadmins(db, exclude_id=user.id) < 1:
         raise HTTPException(status_code=400, detail="Cannot delete the last Super Admin")
     await db.delete(user)
@@ -382,6 +391,9 @@ async def create_api_key(
     db: AsyncSession = Depends(get_db),
     principal: Principal = Depends(require_module("settings_access", "full")),
 ):
+    if principal.auth_via == "api_key":
+        # A scoped key must not be able to mint an unscoped one.
+        raise HTTPException(status_code=403, detail="API keys cannot create API keys — sign in to the panel")
     target_user_id = body.user_id or principal.user_id
     if target_user_id != principal.user_id and not principal.is_superadmin:
         raise HTTPException(status_code=403, detail="Only Super Admin can create keys for other users")
