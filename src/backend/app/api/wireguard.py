@@ -143,7 +143,10 @@ async def create_peer(
 ):
     mod = await _mod(db)
     _require_mutations(mod)
-    return await wg.create_peer(body.model_dump(), mod)
+    try:
+        return await wg.create_peer(body.model_dump(), mod)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @router.put("/peers/{peer_id}")
@@ -156,7 +159,10 @@ async def update_peer(
 ):
     mod = await _mod(db)
     _require_mutations(mod)
-    return await wg.update_peer(peer_id, body.model_dump(exclude_unset=True), mod)
+    try:
+        return await wg.update_peer(peer_id, body.model_dump(exclude_unset=True), mod)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @router.delete("/peers/{peer_id}")

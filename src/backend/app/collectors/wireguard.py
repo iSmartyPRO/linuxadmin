@@ -22,6 +22,9 @@ MANAGED_MARKER = "# managed-by: lnxadmin-wireguard"
 
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,31}$")
 IFACE_RE = re.compile(r"^[a-zA-Z0-9_]{1,15}$")
+# Uplink names may carry dots/dashes (eth0.100, br-lan); they end up in the
+# PostUp/PostDown shell lines wg-quick runs as root, so nothing else is allowed.
+WAN_IFACE_RE = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,14}$")
 
 ROUTE_PRESETS: dict[str, dict[str, Any]] = {
     "vpn_only": {
@@ -476,14 +479,22 @@ def _normalize_peer_dns_fields(body: dict[str, Any], server: dict[str, Any]) -> 
         # Back-compat: explicit dns string ⇒ custom; empty/missing ⇒ none
         if raw is None or str(raw).strip() == "":
             return "none", ""
-        return "custom", str(raw).strip()
+        return "custom", _clean_dns(raw)
     if mode not in {"none", "server", "custom"}:
         mode = "none"
     if mode == "none":
         return "none", ""
     if mode == "server":
         return "server", ""  # resolved at config-build time
-    return "custom", (str(raw).strip() if raw is not None else "")
+    return "custom", _clean_dns(raw)
+
+
+def _clean_dns(raw: Any) -> str:
+    """DNS servers / search domains only — the value is written into wg configs."""
+    value = str(raw or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9.:_, -]*", value):
+        raise ValueError("Invalid DNS value")
+    return value
 
 
 def _resolve_allowed_ips(
@@ -493,7 +504,12 @@ def _resolve_allowed_ips(
 ) -> list[str]:
     mode = (mode or "vpn_only").lower()
     if mode == "custom":
-        return [x.strip() for x in (custom or []) if x and x.strip()]
+        out = []
+        for x in custom or []:
+            if x and x.strip():
+                ipaddress.ip_network(x.strip(), strict=False)  # ValueError on junk
+                out.append(x.strip())
+        return out
     if mode == "vpn_only":
         return [_network_of(server_cidr)]
     preset = ROUTE_PRESETS.get(mode) or ROUTE_PRESETS["vpn_only"]
@@ -901,6 +917,11 @@ async def create_or_update_server(
     wan = (body.get("wan_interface") or existing.get("wan_interface") or "").strip()
     if not wan:
         wan = await _detect_wan_iface()
+    if not WAN_IFACE_RE.fullmatch(wan):
+        return {"ok": False, "error": "Invalid WAN interface name"}
+    for field in ("dns", "endpoint"):
+        if any(c in str(body.get(field) or "") for c in "\r\n"):
+            return {"ok": False, "error": f"Invalid {field}"}
 
     meta = {
         "interface": iface,
@@ -1013,6 +1034,8 @@ async def apply_server(options: dict[str, Any] | None = None) -> dict[str, Any]:
         if data:
             peers_raw.append(data)
 
+    if meta.get("nat_enabled", True) and not WAN_IFACE_RE.fullmatch(meta.get("wan_interface") or "eth0"):
+        return {"ok": False, "error": "Invalid WAN interface in server config — save the server settings again"}
     conf = _build_server_conf(meta, peers_raw)
     conf_path = str(_conf_path(opts))
     ok, err = await _write_secret_file(conf_path, conf, "0600")
