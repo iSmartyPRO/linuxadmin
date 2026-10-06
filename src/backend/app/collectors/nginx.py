@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import ipaddress
 import json
@@ -737,13 +738,17 @@ async def _save_state(opts: dict[str, Any], state: dict[str, Any]) -> tuple[bool
     return await _write_file_priv(str(_state_path(opts)), json.dumps(state, indent=2, ensure_ascii=False), "600")
 
 
+# Data goes in as positional args ($1, $2), never into the script text.
+_APPEND_LINE = ["bash", "-c", 'printf \'%s\\n\' "$1" >> "$2"', "append-line"]
+
+
 async def _audit(opts: dict[str, Any], action: str, detail: dict[str, Any] | None = None) -> None:
     line = json.dumps({"ts": _now(), "action": action, "detail": detail or {}}, ensure_ascii=False)
     path = _audit_log_path(opts)
     try:
         await _ensure_dirs(opts)
         # append via shell to keep simple under privilege
-        code, _, _ = await run_privileged(["bash", "-c", f"printf '%s\\n' {json.dumps(line)} >> {path}"], timeout=5.0)
+        code, _, _ = await run_privileged(_APPEND_LINE + [line, str(path)], timeout=5.0)
         if code != 0:
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
@@ -2533,7 +2538,7 @@ async def _append_acme_log(opts: dict[str, Any], entry: dict[str, Any]) -> None:
         with path.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except OSError:
-        await run_privileged(["bash", "-c", f"printf '%s\\n' {json.dumps(line)} >> {path}"])
+        await run_privileged(_APPEND_LINE + [line, str(path)])
 
 
 async def acme_issue(body: dict[str, Any], options: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2972,7 +2977,9 @@ async def upsert_dns_provider(body: dict[str, Any], options: dict[str, Any] | No
     token = str(body.get("token") or body.get("api_token") or "").strip()
     if ptype != "custom" and not token and not body.get("id"):
         return {"ok": False, "error": "API token required"}
-    pid = body.get("id") or _new_id("dns")
+    pid = str(body.get("id") or _new_id("dns"))
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", pid):
+        return {"ok": False, "error": "Invalid provider id"}
     existing = next((p for p in state["dns_providers"] if p.get("id") == pid), None)
     provider = {
         "id": pid,
@@ -3168,6 +3175,19 @@ async def service_action(action: str, options: dict[str, Any] | None = None) -> 
     return {"ok": code == 0, "message": (out or err or "").strip(), "error": None if code == 0 else (err or out)}
 
 
+async def _tcp_probe(host: str, port: int, timeout: float = 2.0) -> bool:
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+    except (OSError, asyncio.TimeoutError):
+        return False
+    writer.close()
+    try:
+        await writer.wait_closed()
+    except OSError:
+        pass
+    return True
+
+
 async def probe_backends(options: dict[str, Any] | None = None) -> dict[str, Any]:
     opts = _opts(options)
     state = _load_state(opts)
@@ -3180,20 +3200,7 @@ async def probe_backends(options: dict[str, Any] | None = None) -> dict[str, Any
             if host.startswith("docker:"):
                 host = host[7:]
             port = int(b["port"])
-            # TCP connect probe
-            code, out, err = await run_cmd(
-                ["bash", "-c", f"timeout 2 bash -c 'echo > /dev/tcp/{host}/{port}' 2>/dev/null"],
-                timeout=4.0,
-            )
-            # /dev/tcp may fail in some shells — fallback to nc/python
-            if code != 0:
-                code2, _, _ = await run_cmd(
-                    ["python3", "-c", f"import socket;s=socket.create_connection(('{host}',{port}),2);s.close()"],
-                    timeout=5.0,
-                )
-                ok = code2 == 0
-            else:
-                ok = True
+            ok = await _tcp_probe(host, port)
             results.append({
                 "route_id": r["id"],
                 "route_name": r.get("name"),
