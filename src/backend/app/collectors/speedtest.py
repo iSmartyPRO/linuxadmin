@@ -90,6 +90,7 @@ def _detect_pkg_manager() -> str | None:
 
 
 _IPERF_VERSION: dict[str, Any] = {"path": None, "version": None}
+_IPERF_OPTIONS: dict[str, Any] = {"path": None, "options": frozenset()}
 
 
 async def iperf_version() -> str | None:
@@ -105,6 +106,17 @@ async def iperf_version() -> str | None:
     version = m.group(1) if m else (text.splitlines()[0] if text else None)
     _IPERF_VERSION.update(path=path, version=version)
     return version
+
+
+async def iperf_options(path: str) -> frozenset[str]:
+    """Long options the installed iperf3 understands (older builds lack
+    --forceflush, --connect-timeout, --bidir, --idle-timeout)."""
+    if _IPERF_OPTIONS.get("path") == path:
+        return _IPERF_OPTIONS["options"]
+    code, out, err = await run_cmd([path, "--help"], timeout=5.0)
+    options = frozenset(re.findall(r"--([a-z][a-z0-9-]+)", f"{out or ''}{err or ''}"))
+    _IPERF_OPTIONS.update(path=path, options=options)
+    return options
 
 
 async def tools_status() -> dict[str, Any]:
@@ -196,6 +208,7 @@ async def install_iperf(options: dict[str, Any] | None = None) -> dict[str, Any]
             return {"ok": False, "error": (err or out or "install failed")[-600:], "log": "\n\n".join(logs)[-8000:]}
 
     _IPERF_VERSION.update(path=None, version=None)
+    _IPERF_OPTIONS.update(path=None, options=frozenset())
     tools = await tools_status()
     ok = bool(tools["iperf3"])
     return {
@@ -654,9 +667,20 @@ def valid_host(host: str) -> bool:
     return bool(host) and bool(_HOST_RE.match(host)) and not host.startswith("-")
 
 
-def build_client_argv(binary: str, p: dict[str, Any]) -> list[str]:
-    argv = [binary, "-c", p["host"], "-p", str(p["port"]), "-t", str(p["duration"]), "-i", str(p["interval"])]
-    argv += ["-P", str(p["parallel"]), "--forceflush", "-V", "-f", "m"]
+def _unbuffered(binary: str, supported: frozenset[str]) -> list[str]:
+    """Without --forceflush iperf3 block-buffers a pipe; fall back to stdbuf."""
+    if "forceflush" in supported:
+        return [binary]
+    stdbuf = shutil.which("stdbuf")
+    return [stdbuf, "-oL", binary] if stdbuf else [binary]
+
+
+def build_client_argv(binary: str, p: dict[str, Any], supported: frozenset[str]) -> list[str]:
+    argv = _unbuffered(binary, supported)
+    argv += ["-c", p["host"], "-p", str(p["port"]), "-t", str(p["duration"]), "-i", str(p["interval"])]
+    argv += ["-P", str(p["parallel"]), "-V", "-f", "m"]
+    if "forceflush" in supported:
+        argv.append("--forceflush")
     if p.get("omit"):
         argv += ["-O", str(p["omit"])]
     direction = p.get("direction", "upload")
@@ -688,13 +712,15 @@ def build_client_argv(binary: str, p: dict[str, Any]) -> list[str]:
         argv += ["-B", str(p["bind"])]
     if p.get("tos"):
         argv += ["-S", str(p["tos"])]
-    if p.get("connect_timeout_ms"):
+    if p.get("connect_timeout_ms") and "connect-timeout" in supported:
         argv += ["--connect-timeout", str(p["connect_timeout_ms"])]
     return argv
 
 
-def build_server_argv(binary: str, p: dict[str, Any]) -> list[str]:
-    argv = [binary, "-s", "-p", str(p["port"]), "-i", str(p["interval"]), "--forceflush", "-f", "m"]
+def build_server_argv(binary: str, p: dict[str, Any], supported: frozenset[str]) -> list[str]:
+    argv = _unbuffered(binary, supported) + ["-s", "-p", str(p["port"]), "-i", str(p["interval"]), "-f", "m"]
+    if "forceflush" in supported:
+        argv.append("--forceflush")
     if p.get("bind"):
         argv += ["-B", str(p["bind"])]
     if p.get("one_off"):
@@ -703,7 +729,7 @@ def build_server_argv(binary: str, p: dict[str, Any]) -> list[str]:
         argv.append("-4")
     elif p.get("ip_version") == 6:
         argv.append("-6")
-    if p.get("idle_timeout"):
+    if p.get("idle_timeout") and "idle-timeout" in supported:
         argv += ["--idle-timeout", str(p["idle_timeout"])]
     return argv
 
@@ -927,8 +953,8 @@ async def _read_process(job: Job, proc: asyncio.subprocess.Process, parser: Iper
 
 
 async def run_iperf_client(job: Job, binary: str, opts: dict[str, Any]) -> None:
-    argv = build_client_argv(binary, job.params)
-    job.meta["command"] = " ".join(argv[0:1] + [a for a in argv[1:]]).replace(binary, "iperf3", 1)
+    argv = build_client_argv(binary, job.params, await iperf_options(binary))
+    job.meta["command"] = " ".join(argv[argv.index(binary) :]).replace(binary, "iperf3", 1)
     job.add_log("$ " + job.meta["command"])
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -986,8 +1012,8 @@ async def run_iperf_client(job: Job, binary: str, opts: dict[str, Any]) -> None:
 
 
 async def run_iperf_server(job: Job, binary: str) -> None:
-    argv = build_server_argv(binary, job.params)
-    job.meta["command"] = " ".join(argv).replace(binary, "iperf3", 1)
+    argv = build_server_argv(binary, job.params, await iperf_options(binary))
+    job.meta["command"] = " ".join(argv[argv.index(binary) :]).replace(binary, "iperf3", 1)
     job.meta["sessions"] = []
     job.add_log("$ " + job.meta["command"])
     try:

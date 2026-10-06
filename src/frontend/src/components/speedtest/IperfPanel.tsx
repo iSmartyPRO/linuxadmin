@@ -144,6 +144,13 @@ const PUBLIC_SERVERS = [
   { host: 'speedtest.serverius.net', port: 5002, note: 'Serverius · NL (port 5002)' },
 ]
 
+/** "host:port" → parts; IPv6 literals (more than one colon) are left alone. */
+function parseHostPort(value: string, port: number): { host: string; port: number } {
+  const v = value.trim()
+  const m = /^([^:]+):(\d{2,5})$/.exec(v)
+  return m ? { host: m[1], port: Number(m[2]) } : { host: v, port }
+}
+
 const CLIENT_OPTS_KEY = 'lnxadmin_iperf_client_opts'
 const RECENT_KEY = 'lnxadmin_iperf_recent'
 
@@ -322,7 +329,8 @@ function IperfClient({ info, unit }: { info: SpeedInfo; unit: RateUnit }) {
   useEffect(() => localStorage.setItem(CLIENT_OPTS_KEY, JSON.stringify(opts)), [opts])
 
   const start = async () => {
-    if (!opts.host.trim()) {
+    const target = parseHostPort(opts.host, opts.port)
+    if (!target.host) {
       message.warning('Enter the iperf3 server host')
       return
     }
@@ -330,7 +338,7 @@ function IperfClient({ info, unit }: { info: SpeedInfo; unit: RateUnit }) {
     try {
       const body = {
         ...opts,
-        host: opts.host.trim(),
+        ...target,
         bitrate: opts.bitrate || (opts.protocol === 'udp' ? '100M' : null),
         window: opts.window || null,
         length: opts.length || null,
@@ -339,7 +347,8 @@ function IperfClient({ info, unit }: { info: SpeedInfo; unit: RateUnit }) {
       }
       const snap = await api<{ id: string }>('/api/speedtest/iperf/client', { method: 'POST', body: JSON.stringify(body) })
       setJobId(snap.id)
-      const next = [{ host: body.host, port: opts.port }, ...recent.filter((r) => !(r.host === body.host && r.port === opts.port))].slice(0, 8)
+      set(target)
+      const next = [target, ...recent.filter((r) => !(r.host === target.host && r.port === target.port))].slice(0, 8)
       setRecent(next)
       localStorage.setItem(RECENT_KEY, JSON.stringify(next))
     } catch (e) {
@@ -388,11 +397,9 @@ function IperfClient({ info, unit }: { info: SpeedInfo; unit: RateUnit }) {
     [recent],
   )
 
-  const onHostChange = (v: string) => {
-    const m = /^(.+):(\d{2,5})$/.exec(v)
-    if (m && !m[1].includes(':')) set({ host: m[1], port: Number(m[2]) })
-    else set({ host: v })
-  }
+  // Split "host:port" only once the value is final (picked or field left);
+  // doing it per keystroke turns "10.0.0.5:5201" into host 10.0.0.501, port 52.
+  const splitHostPort = (v: string) => set(parseHostPort(v, opts.port))
 
   const stats = useMemo(() => liveStats(job?.samples || []), [job?.samples])
   const bidir = (job?.params?.direction ?? opts.direction) === 'bidir'
@@ -411,8 +418,9 @@ function IperfClient({ info, unit }: { info: SpeedInfo; unit: RateUnit }) {
               <AutoComplete
                 value={opts.host}
                 options={hostOptions}
-                onChange={onHostChange}
-                onSelect={(v: string) => onHostChange(v)}
+                onChange={(v: string) => set({ host: v })}
+                onSelect={(v: string) => splitHostPort(v)}
+                onBlur={() => splitHostPort(opts.host)}
                 disabled={running}
                 style={{ flex: 1 }}
                 filterOption={(input, option) => String((option as { value?: string } | undefined)?.value ?? '').toLowerCase().includes(input.toLowerCase())}

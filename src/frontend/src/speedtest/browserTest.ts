@@ -136,6 +136,15 @@ export async function runBrowserTest(
     signal.addEventListener('abort', onAbort)
     let total = 0
     let running = true
+    // A server/proxy refusal (401, 413, …) ends the test instead of being
+    // retried in a tight loop and counted as throughput.
+    let fatal: Error | null = null
+    const fail = (status: number) => {
+      if (fatal) return
+      const hint = status === 413 ? ' — request body too large (raise client_max_body_size on the reverse proxy)' : ''
+      fatal = new Error(`${dir === 'download' ? 'Download' : 'Upload'} rejected: HTTP ${status}${hint}`)
+      running = false
+    }
     const xhrs = new Set<XMLHttpRequest>()
 
     const dlWorker = async () => {
@@ -146,6 +155,10 @@ export async function runBrowserTest(
             cache: 'no-store',
             signal: ctrl.signal,
           })
+          if (res.status >= 400 && res.status < 500) {
+            fail(res.status)
+            return
+          }
           if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
           const reader = res.body.getReader()
           for (;;) {
@@ -157,10 +170,9 @@ export async function runBrowserTest(
               break
             }
           }
-        } catch (e) {
+        } catch {
           if (!running || ctrl.signal.aborted) return
           await sleep(200)
-          if (String(e).includes('401')) throw e
         }
       }
     }
@@ -183,11 +195,23 @@ export async function runBrowserTest(
             else resolve()
           }
           xhr.onload = () => {
+            if (xhr.status < 200 || xhr.status >= 300) {
+              total -= last // the body was not accepted
+              if (xhr.status >= 400 && xhr.status < 500) {
+                fail(xhr.status)
+                xhrs.delete(xhr)
+                return resolve()
+              }
+              return setTimeout(next, 200)
+            }
             total += Math.max(0, blob.size - last)
             last = blob.size
             next()
           }
-          xhr.onerror = () => setTimeout(next, 200)
+          xhr.onerror = () => {
+            total -= last
+            setTimeout(next, 200)
+          }
           xhr.onabort = () => {
             xhrs.delete(xhr)
             resolve()
@@ -246,7 +270,7 @@ export async function runBrowserTest(
           ? ((total - graceBytes) * 8 * 1000) / (el - graceAt)
           : (total * 8 * 1000) / Math.max(1, el)
       emit({ bps: ema, avgBps: avg, progress: Math.min(1, el / durMs), bytes: total })
-      if (el >= durMs) break
+      if (fatal || el >= durMs) break
     }
     running = false
     ctrl.abort()
@@ -254,6 +278,7 @@ export async function runBrowserTest(
     signal.removeEventListener('abort', onAbort)
     await Promise.allSettled([...workers, pinger])
     if (signal.aborted) throw new DOMException('aborted', 'AbortError')
+    if (fatal) throw fatal
     const final = result.avgBps || 0
     emit(dir === 'download' ? { downloadBps: final } : { uploadBps: final })
   }

@@ -279,6 +279,8 @@ async def iperf_client_start(
     max_par = int(mod.get("max_parallel") or 32)
     if body.parallel > max_par:
         raise HTTPException(status_code=400, detail=f"Parallel streams are limited to {max_par} (Settings → Speedtest)")
+    if body.direction == "bidir" and "bidir" not in await st.iperf_options(binary):
+        raise HTTPException(status_code=400, detail="This iperf3 build has no --bidir (needs iperf3 3.7+)")
     if st.jobs.active("iperf_client"):
         raise HTTPException(status_code=409, detail="An iperf3 client test is already running — stop it first")
     job = st.jobs.create("iperf_client", principal.username, body.model_dump())
