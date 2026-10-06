@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from app.collectors.system import collect_system_metrics
 from app.core.config import get_settings
-from app.core.db import AsyncSessionLocal
+from app.core.db import new_session
 from app.services.persistence import (
     cleanup_old_metrics,
     get_app_config,
@@ -41,7 +41,7 @@ class BackgroundWorker:
 
     async def _load_runtime(self) -> tuple[float, float, dict[str, Any]]:
         env = get_settings()
-        async with AsyncSessionLocal() as session:
+        async with new_session() as session:
             app_cfg = await get_app_config(session)
             modules = await get_modules(session)
         metrics_interval = float(app_cfg.get("metrics_interval_seconds") or env.metrics_interval)
@@ -81,12 +81,12 @@ class BackgroundWorker:
                         await metrics_hub.broadcast({"type": "system", "data": metrics})
 
                 if want_record and started - last_history >= history_interval:
-                    async with AsyncSessionLocal() as session:
+                    async with new_session() as session:
                         await persist_system_snapshot(session, metrics)
                     last_history = started
 
                 pg_interval = 30.0
-                async with AsyncSessionLocal() as session:
+                async with new_session() as session:
                     pg_settings = await get_setting(session, "postgres_monitor", DEFAULT_PG_SETTINGS)
                     pg_interval = float(pg_settings.get("interval_seconds") or 30)
                     if started - last_pg >= pg_interval:

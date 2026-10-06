@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from app.collectors.system import collect_system_metrics
 from app.core.config import get_settings
-from app.core.db import AsyncSessionLocal
+from app.core.db import new_session
+from app.core.setup_state import is_setup_complete
 from app.core.principal import require_module, resolve_bearer
 from app.services.ws_hub import metrics_hub
 
@@ -42,12 +43,12 @@ async def ws_metrics(websocket: WebSocket):
     except (json.JSONDecodeError, TypeError, ValueError):
         token = ""
 
-    if not token or AsyncSessionLocal is None:
+    if not token or not is_setup_complete():
         await websocket.close(code=4401)
         return
 
     try:
-        async with AsyncSessionLocal() as db:
+        async with new_session() as db:
             principal = await resolve_bearer(token, db, settings)
             if not principal.can("overview", "read"):
                 await websocket.close(code=4403)

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from app.core.auth import hash_password
 from app.core.principal import Principal, require_module
 from app.core.config import get_settings
-from app.core.db import AsyncSessionLocal, configure_engine, init_db
+from app.core.db import configure_engine, init_db, new_session
 from app.core.rate_limit import client_ip, setup_limiter
 from app.core.setup_state import (
     apply_bootstrap,
@@ -130,11 +130,9 @@ async def _test_asyncpg(params: DbParams) -> dict[str, Any]:
 
 
 async def _upsert_admin(username: str, password: str) -> None:
-    from app.core.db import AsyncSessionLocal as SessionLocal
     from app.models import Role
 
-    assert SessionLocal is not None
-    async with SessionLocal() as session:
+    async with new_session() as session:
         role_id = None
         role = (
             await session.execute(select(Role).where(Role.slug == "superadmin"))
@@ -227,8 +225,7 @@ async def setup_complete(body: SetupCompleteBody, request: Request):
         # Seed app display name
         from app.services.persistence import set_setting
 
-        assert AsyncSessionLocal is not None
-        async with AsyncSessionLocal() as session:
+        async with new_session() as session:
             await set_setting(session, "app_config", {"name": body.app_name or "Linux Admin"})
 
         mark_setup_complete()

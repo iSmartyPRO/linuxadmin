@@ -14,7 +14,7 @@ from app.api import access, auth, disks, docker, files, history, network, nginx,
 from app.api import settings as settings_api
 from app.collectors.speedtest import jobs as speedtest_jobs
 from app.core.config import get_settings
-from app.core.db import AsyncSessionLocal, configure_engine, init_db
+from app.core.db import init_db, new_session
 from app.core.setup_state import is_setup_complete
 from app.services.persistence import ensure_admin_user
 from app.services.worker import worker
@@ -75,11 +75,8 @@ async def lifespan(app: FastAPI):
         yield
         return
 
-    if AsyncSessionLocal is None:
-        configure_engine()
     await init_db()
-    assert AsyncSessionLocal is not None
-    async with AsyncSessionLocal() as session:
+    async with new_session() as session:
         await ensure_admin_user(session)
     await worker.start()
     app.state.worker_started = True

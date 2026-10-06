@@ -40,13 +40,20 @@ except Exception:
     AsyncSessionLocal = None
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    if not is_setup_complete():
-        raise HTTPException(status_code=503, detail="Initial setup required")
+def new_session() -> AsyncSession:
+    """Session from the *current* engine. Use this instead of importing
+    AsyncSessionLocal: configure_engine() rebinds it (setup wizard, Settings →
+    Connection), and a name imported earlier keeps pointing at the old one."""
     if AsyncSessionLocal is None:
         configure_engine()
     assert AsyncSessionLocal is not None
-    async with AsyncSessionLocal() as session:
+    return AsyncSessionLocal()
+
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    if not is_setup_complete():
+        raise HTTPException(status_code=503, detail="Initial setup required")
+    async with new_session() as session:
         yield session
 
 
