@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import stat
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -511,6 +512,34 @@ def _unique_name(directory: Path, name: str) -> str:
     raise FileManError("Too many files with the same name")
 
 
+def _atomic_write(dest: Path, data: bytes, like: os.stat_result | None = None) -> None:
+    """Write via a fresh, randomly named temp file next to *dest*, then rename.
+
+    mkstemp creates the file with O_EXCL, so a symlink planted by a local user
+    is never followed (the panel runs as root). Mode and owner come from *like*
+    (the file being replaced) or default to 0644.
+    """
+    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=".lnxadmin-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+            os.fchmod(fh.fileno(), stat.S_IMODE(like.st_mode) if like else 0o644)
+            if like is not None:
+                try:
+                    os.fchown(fh.fileno(), like.st_uid, like.st_gid)
+                except PermissionError:
+                    pass
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def write_text(mod: dict[str, Any], root_id: str, rel: str, content: str) -> dict[str, Any]:
     root = _root_record(mod, root_id)
     _require_write(mod, root)
@@ -522,15 +551,9 @@ def write_text(mod: dict[str, Any], root_id: str, rel: str, content: str) -> dic
     path = resolve_rel(root_real, rel, must_exist=True, expect="file")
     if not path.is_file():
         raise FileManError("Path is not a file", 404)
-    tmp = path.with_name(path.name + ".lnxadmin-tmp")
     try:
-        tmp.write_bytes(data)
-        os.replace(tmp, path)
+        _atomic_write(path, data, like=path.stat())
     except OSError as exc:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise FileManError(f"Cannot save file: {exc}") from exc
     return {"ok": True, "rel": _rel_of(root_real, path), "size": len(data)}
 
@@ -654,14 +677,8 @@ def save_upload(mod: dict[str, Any], root_id: str, parent_rel: str, filename: st
     safe = clean_name(Path(filename).name)
     name = _unique_name(parent, safe)
     dest = parent / name
-    tmp = parent / f".{name}.lnxadmin-up"
     try:
-        tmp.write_bytes(data)
-        os.replace(tmp, dest)
+        _atomic_write(dest, data)
     except OSError as exc:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise FileManError(f"Cannot upload file: {exc}") from exc
     return {"ok": True, "rel": _rel_of(root_real, dest), "name": name, "size": len(data)}
