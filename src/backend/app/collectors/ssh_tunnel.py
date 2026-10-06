@@ -365,6 +365,12 @@ def _read_authorized_keys(home: str) -> list[dict[str, Any]]:
     return keys
 
 
+def _clean_comment(comment: str) -> str:
+    # Spaces only — a newline would start a new authorized_keys line without
+    # the restrict/permitopen options.
+    return re.sub(r"[^\w .@+()/-]", "", " ".join(comment.split()))[:128].strip()
+
+
 async def _rewrite_authorized_keys(
     username: str,
     home: str,
@@ -386,7 +392,7 @@ async def _rewrite_authorized_keys(
     ]
     for k in pubkeys:
         base = f"{k['type']} {k['key']}"
-        comment = (k.get("comment") or "").strip()
+        comment = _clean_comment(k.get("comment") or "")
         if comment:
             base = f"{base} {comment}"
         lines.append(f"{opts} {base}")
@@ -793,7 +799,7 @@ async def add_public_key(
         return {"ok": False, "error": "Failed to parse key"}
 
     if comment:
-        parsed["comment"] = re.sub(r"[^\w\s.@+()/-]", "", comment)[:128]
+        parsed["comment"] = _clean_comment(comment)
 
     fp = await _fingerprint_ssh_keygen(f"{parsed['type']} {parsed['key']}")
     if fp:
