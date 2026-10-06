@@ -21,6 +21,12 @@ def _valid_name(name: str) -> bool:
     return bool(NAME_RE.fullmatch(name or ""))
 
 
+def _valid_password(password: str) -> bool:
+    # chpasswd reads "user:password" lines — a newline would start a second
+    # line and set another account's password (e.g. root).
+    return not any(c in password for c in "\r\n\0")
+
+
 def _valid_shell(shell: str) -> bool:
     return bool(SHELL_RE.fullmatch(shell or "")) and Path(shell).is_absolute()
 
@@ -242,6 +248,8 @@ async def create_user(
     if home and not Path(home).is_absolute():
         return {"ok": False, "error": "home must be an absolute path"}
 
+    if password and not _valid_password(password):
+        return {"ok": False, "error": "Password must not contain line breaks"}
     binary = shutil.which("useradd") or "/usr/sbin/useradd"
     cmd = [binary]
     if create_home:
@@ -367,6 +375,8 @@ async def set_user_password(
         return {"ok": False, "error": "Invalid name"}
     if not password:
         return {"ok": False, "error": "Empty password"}
+    if not _valid_password(password):
+        return {"ok": False, "error": "Password must not contain line breaks"}
     deny = _deny_system_user(username, min_uid, allow_system)
     if deny:
         return {"ok": False, "error": deny}
