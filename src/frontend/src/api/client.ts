@@ -98,9 +98,22 @@ export async function apiDownload(
     }
     throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
   }
-  const cd = res.headers.get('Content-Disposition') || ''
-  const m = /filename="?([^"]+)"?/i.exec(cd)
-  return { blob: await res.blob(), filename: m?.[1] || null }
+  return { blob: await res.blob(), filename: filenameFromDisposition(res.headers.get('Content-Disposition') || '') }
+}
+
+/** RFC 6266: prefer filename*=UTF-8''<percent-encoded> (used for spaces / non-ASCII), else filename="…". */
+export function filenameFromDisposition(cd: string): string | null {
+  const star = /filename\*\s*=\s*([^']*)'[^']*'([^;]+)/i.exec(cd)
+  if (star) {
+    try {
+      return decodeURIComponent(star[2].trim())
+    } catch {
+      /* fall through to the plain form */
+    }
+  }
+  const plain = /filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;]+))/i.exec(cd)
+  if (!plain) return null
+  return plain[1] != null ? plain[1].replace(/\\(.)/g, '$1') : plain[2].trim()
 }
 
 /** WebSocket URL without secrets in the query string. */
