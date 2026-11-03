@@ -18,6 +18,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # The app runs Base.metadata.create_all on startup, so these tables may
+    # already exist when the migration is applied later — create only what is missing.
+    existing = set(sa.inspect(op.get_bind()).get_table_names())
+    if "wireguard_snapshots" not in existing:
+        _create_snapshots()
+    if "wireguard_connection_events" not in existing:
+        _create_events()
+
+
+def _create_snapshots() -> None:
     op.create_table(
         "wireguard_snapshots",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
@@ -29,6 +39,8 @@ def upgrade() -> None:
     )
     op.create_index("ix_wireguard_snapshots_recorded_at", "wireguard_snapshots", ["recorded_at"])
 
+
+def _create_events() -> None:
     op.create_table(
         "wireguard_connection_events",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
