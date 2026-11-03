@@ -6,6 +6,7 @@ ROOT        := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 BACKEND     := $(ROOT)/src/backend
 FRONTEND    := $(ROOT)/src/frontend
 VENV        := $(BACKEND)/.venv
+PY          := $(shell command -v python3.12 2>/dev/null || command -v python3)
 PYTHON      := $(VENV)/bin/python
 PIP         := $(VENV)/bin/pip
 UVICORN     := $(VENV)/bin/uvicorn
@@ -49,7 +50,7 @@ install: install-backend install-frontend ## Install Python + Node dependencies
 
 install-backend: ## Create venv and pip install
 	@test -f "$(ENV_FILE)" || $(MAKE) env
-	python3 -m venv "$(VENV)"
+	"$(PY)" -m venv "$(VENV)"
 	"$(PIP)" install --upgrade pip
 	"$(PIP)" install -r "$(BACKEND)/requirements.txt"
 	@echo "Backend venv ready: $(VENV)"

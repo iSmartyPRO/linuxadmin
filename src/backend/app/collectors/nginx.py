@@ -809,11 +809,16 @@ async def _service_status() -> dict[str, Any]:
 
 async def _stub_status() -> dict[str, Any]:
     """Parse nginx stub_status if enabled on localhost."""
-    code, out, _ = await run_cmd(
-        ["curl", "-fsS", "--max-time", "2", "http://127.0.0.1/lnxadmin-nginx-status"],
-        timeout=4.0,
-    )
-    if code != 0 or not out:
+    # 18088 is the current port; 8088 is what configs applied before 2026-11 still use.
+    code, out = 1, ""
+    for port in (18088, 8088):
+        code, out, _ = await run_cmd(
+            ["curl", "-fsS", "--max-time", "2", f"http://127.0.0.1:{port}/lnxadmin-nginx-status"],
+            timeout=4.0,
+        )
+        if code == 0 and out and "Active connections" in out:
+            break
+    else:
         return {"available": False}
     # Active connections: 1 \n server accepts handled requests \n 1 1 1 \n Reading: 0 Writing: 1 Waiting: 0
     active = accepts = handled = requests = reading = writing = waiting = 0
@@ -1538,9 +1543,9 @@ map $http_upgrade $connection_upgrade {{
     ''      close;
 }}
 
-# Local-only stub_status
+# Local-only stub_status (18088 — avoid clashing with apps published on :8088)
 server {{
-    listen 127.0.0.1:8088;
+    listen 127.0.0.1:18088;
     server_name localhost;
     location /lnxadmin-nginx-status {{
         stub_status;
@@ -1560,7 +1565,7 @@ server {{
 
 {_render_acme_location(o)}
     location / {{
-        return 404;
+        return 301 https://$host$request_uri;
     }}
 }}
 """
