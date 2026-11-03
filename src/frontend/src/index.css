@@ -1937,12 +1937,19 @@ html[data-theme='dark'] .fm-list-row.is-current {
   }
 }
 
+/* Near-zero durations instead of `none`: antd modals/drawers wait for animationend,
+   with `animation: none` they stay open but invisible (RDP sessions report reduced motion). */
 @media (prefers-reduced-motion: reduce) {
   .la-page,
   .la-live-dot,
-  * {
-    animation: none !important;
-    transition: none !important;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
   }
 }
 
