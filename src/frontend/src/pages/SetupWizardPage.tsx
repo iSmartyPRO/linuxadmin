@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { BrandLogo } from '../components/BrandLogo'
+import { PoweredBy } from '../components/PoweredBy'
 import { useSetupStatus } from '../api/setupStatus'
 
 const SETUP_TOKEN_KEY = 'lnxadmin_setup_token'
@@ -298,6 +299,8 @@ export function SetupWizardPage() {
             </div>
           </Form>
         ) : null}
+
+        <PoweredBy style={{ marginTop: 24 }} />
       </motion.div>
     </div>
   )

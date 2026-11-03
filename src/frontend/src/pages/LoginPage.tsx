@@ -4,6 +4,7 @@ import { Navigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useAuth } from '../api/auth'
 import { BrandLogo } from '../components/BrandLogo'
+import { PoweredBy } from '../components/PoweredBy'
 
 export function LoginPage() {
   const { login, token, loading } = useAuth()
@@ -149,6 +150,7 @@ export function LoginPage() {
               Sign in
             </Button>
           </Form>
+          <PoweredBy style={{ marginTop: 20 }} />
         </motion.div>
       </section>
     </div>

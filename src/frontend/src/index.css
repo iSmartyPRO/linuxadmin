@@ -436,6 +436,42 @@ html[data-theme='dark'] .la-sider-toggle {
   padding: 8px 4px 24px;
 }
 
+.la-powered-by {
+  text-align: center;
+  font-size: 12px;
+  color: var(--la-muted);
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+}
+
+.la-powered-by a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.la-powered-by a:hover {
+  color: var(--la-accent);
+  text-decoration: underline;
+}
+
+.la-app-shell {
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.la-app-footer {
+  width: 100%;
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--la-panel) 88%, transparent) !important;
+  border-top: 1px solid var(--la-panel-border);
+  backdrop-filter: blur(16px);
+  padding: 12px 24px !important;
+  height: auto !important;
+  line-height: 1.4 !important;
+  margin: 0 !important;
+}
+
 .la-log {
   max-height: 320px;
   overflow: auto;

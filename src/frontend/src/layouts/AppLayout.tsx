@@ -30,8 +30,9 @@ import { useAuth } from '../api/auth'
 import { useAccess } from '../api/access'
 import { useAppSettings, type ModuleKey } from '../api/settings'
 import { BrandLogo } from '../components/BrandLogo'
+import { PoweredBy } from '../components/PoweredBy'
 
-const { Header, Sider, Content } = Layout
+const { Header, Sider, Content, Footer } = Layout
 
 const NAV_COLLAPSED_KEY = 'la.nav.collapsed'
 
@@ -362,6 +363,9 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
         <Content className="la-content-shell" style={{ margin: '0 20px 20px' }}>
           <Outlet />
         </Content>
+        <Footer className="la-app-footer">
+          <PoweredBy />
+        </Footer>
       </Layout>
     </Layout>
   )

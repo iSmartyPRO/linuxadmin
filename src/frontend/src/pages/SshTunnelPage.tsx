@@ -160,7 +160,7 @@ export function SshTunnelPage() {
   const [configMode, setConfigMode] = useState<'random' | 'same' | 'custom'>('random')
   /** user_owned = only pubkey was added (BYOK); include_session = pack private key if available */
   const [packKeyMode, setPackKeyMode] = useState<'user_owned' | 'include_session'>('user_owned')
-  const [packIdentityFile, setPackIdentityFile] = useState('~/.ssh/id_ed25519')
+  const [packIdentityFile, setPackIdentityFile] = useState('~/.ssh/id_rsa')
   const [forwardRows, setForwardRows] = useState<
     Array<{ host: string; port: number; label?: string; local_port: number }>
   >([])
@@ -183,7 +183,7 @@ export function SshTunnelPage() {
     setPackIdentityFile(
       hasSessionKey
         ? `~/.ssh/${sessionPrivateKey!.filename}`
-        : '~/.ssh/id_ed25519',
+        : '~/.ssh/id_rsa',
     )
     setConfigBuilderOpen(true)
   }
@@ -212,7 +212,7 @@ export function SshTunnelPage() {
       const identity =
         packKeyMode === 'include_session' && sessionPrivateKey?.username === detail.username
           ? `~/.ssh/${sessionPrivateKey.filename}`
-          : packIdentityFile.trim() || '~/.ssh/id_ed25519'
+          : packIdentityFile.trim() || '~/.ssh/id_rsa'
       const res = await api<{
         ok: boolean
         config?: string
@@ -280,7 +280,7 @@ export function SshTunnelPage() {
       opts?.identity_file ||
       (private_key && keyFromSession
         ? `~/.ssh/${keyFromSession.filename}`
-        : packIdentityFile.trim() || '~/.ssh/id_ed25519')
+        : packIdentityFile.trim() || '~/.ssh/id_rsa')
 
     setPackBusy(true)
     try {
@@ -1131,7 +1131,7 @@ export function SshTunnelPage() {
               onChange={(v: 'user_owned' | 'include_session') => {
                 setPackKeyMode(v)
                 if (v === 'user_owned') {
-                  setPackIdentityFile('~/.ssh/id_ed25519')
+                  setPackIdentityFile('~/.ssh/id_rsa')
                 } else if (
                   sessionPrivateKey &&
                   sessionPrivateKey.username === detail?.username
@@ -1162,7 +1162,7 @@ export function SshTunnelPage() {
               className="mono"
               value={packIdentityFile}
               onChange={(e) => setPackIdentityFile(e.target.value)}
-              placeholder="~/.ssh/id_ed25519"
+              placeholder="~/.ssh/id_rsa"
             />
           </Form.Item>
         </Form>
