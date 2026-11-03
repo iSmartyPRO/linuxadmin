@@ -182,6 +182,7 @@ DEFAULT_MODULES = {
         "enabled": True,
         "allow_mutations": False,
         "show_hidden": False,
+        "open_click": "double",
         "max_preview_mb": 2,
         "max_upload_mb": 50,
         "roots": [],

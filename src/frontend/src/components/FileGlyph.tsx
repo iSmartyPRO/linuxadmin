@@ -1,10 +1,23 @@
 import { useId } from 'react'
 
-export type GlyphTone = 'folder' | 'pdf' | 'image' | 'markdown' | 'text' | 'audio' | 'video' | 'archive' | 'file'
+export type GlyphTone =
+  | 'folder'
+  | 'pdf'
+  | 'docx'
+  | 'xlsx'
+  | 'image'
+  | 'markdown'
+  | 'text'
+  | 'audio'
+  | 'video'
+  | 'archive'
+  | 'file'
 
 const STOPS: Record<GlyphTone, [string, string]> = {
   folder: ['#ffe08a', '#e39b16'],
   pdf: ['#fda4af', '#e11d48'],
+  docx: ['#93c5fd', '#2563eb'],
+  xlsx: ['#86efac', '#16a34a'],
   image: ['#ddd6fe', '#7c3aed'],
   markdown: ['#99f6e4', '#0f766e'],
   text: ['#bae6fd', '#0284c7'],
@@ -24,6 +37,8 @@ export function glyphTone(entry: {
 }): GlyphTone {
   if (entry.kind === 'dir' || entry.link_dir) return 'folder'
   if (entry.preview === 'pdf') return 'pdf'
+  if (entry.preview === 'docx') return 'docx'
+  if (entry.preview === 'xlsx') return 'xlsx'
   if (entry.preview === 'image') return 'image'
   if (entry.preview === 'markdown') return 'markdown'
   if (entry.preview === 'audio') return 'audio'

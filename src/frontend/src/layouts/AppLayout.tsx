@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Layout, Menu, Button, Typography, Switch, Tooltip, Spin, type MenuProps } from 'antd'
 import {
   DashboardOutlined,
@@ -22,6 +22,8 @@ import {
   FolderOutlined,
   FolderOpenOutlined,
   ThunderboltOutlined,
+  LeftOutlined,
+  RightOutlined,
 } from '@ant-design/icons'
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../api/auth'
@@ -30,6 +32,16 @@ import { useAppSettings, type ModuleKey } from '../api/settings'
 import { BrandLogo } from '../components/BrandLogo'
 
 const { Header, Sider, Content } = Layout
+
+const NAV_COLLAPSED_KEY = 'la.nav.collapsed'
+
+function readNavCollapsed(): boolean {
+  try {
+    return localStorage.getItem(NAV_COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
 
 type Props = {
   dark: boolean
@@ -145,6 +157,17 @@ const MENU: Array<{
   { key: '/settings', module: 'settings', icon: <SettingOutlined />, label: 'Settings', to: '/settings' },
 ]
 
+/** Highlight the mounted folder even while a subfolder is in the address bar. */
+function menuSelectedKey(path: string): string {
+  if (path === '/files') return '/files'
+  if (path.startsWith('/files/')) {
+    const id = path.slice('/files/'.length).split('/')[0]
+    return id ? `/files/${id}` : '/files'
+  }
+  const seg = path.split('/')[1] || ''
+  return seg ? `/${seg}` : '/'
+}
+
 export function AppLayout({ dark, onToggleTheme }: Props) {
   const { username, logout } = useAuth()
   const { loading, appName, hostname, isModuleEnabled, modules } = useAppSettings()
@@ -152,9 +175,26 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
   const location = useLocation()
   const path = location.pathname
   const onFiles = path === '/files' || path.startsWith('/files/')
-  const selected = path.startsWith('/files/') ? path : '/' + (path.split('/')[1] || '')
-  const [collapsed, setCollapsed] = useState(false)
+  const selected = menuSelectedKey(path)
+  const navPref = useRef(readNavCollapsed())
+  const [collapsed, setCollapsed] = useState(navPref.current)
   const [openKeys, setOpenKeys] = useState<string[]>(['files-group'])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(NAV_COLLAPSED_KEY, navPref.current ? '1' : '0')
+    } catch {
+      /* private mode */
+    }
+  }, [collapsed])
+
+  function toggleNav() {
+    setCollapsed((value) => {
+      const next = !value
+      navPref.current = next
+      return next
+    })
+  }
 
   useEffect(() => {
     if (onFiles) {
@@ -171,6 +211,7 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
   }).map((item) => ({
     key: item.key,
     icon: item.icon,
+    title: item.label,
     label: <Link to={item.to}>{item.label}</Link>,
   }))
 
@@ -184,12 +225,14 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
       .map((root) => ({
         key: `/files/${root.id}`,
         icon: <FolderOpenOutlined />,
+        title: root.name,
         label: <Link to={`/files/${root.id}`}>{root.name}</Link>,
       }))
     const filesItem: NonNullable<MenuProps['items']>[number] = children.length
       ? {
           key: 'files-group',
           icon: <FolderOutlined />,
+          title: 'Files',
           label: 'Files',
           children,
         }
@@ -209,14 +252,21 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
     }
   }
 
+  const who = profile?.display_name || username || '?'
+  const initial = who.trim().charAt(0).toUpperCase() || '?'
+  const roleLabel = profile?.role?.name || (profile?.is_superadmin ? 'Super Admin' : 'session')
+
   return (
     <Layout style={{ minHeight: '100vh', background: 'transparent' }}>
       <Sider
         className="la-sider"
+        collapsible
+        collapsed={collapsed}
+        trigger={null}
         breakpoint="lg"
-        collapsedWidth={72}
+        collapsedWidth={76}
         width={248}
-        onCollapse={setCollapsed}
+        onBreakpoint={(broken) => setCollapsed(broken ? true : navPref.current)}
         style={{
           background: 'var(--la-sider)',
           borderRight: '1px solid var(--la-panel-border)',
@@ -226,26 +276,25 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
           height: '100vh',
         }}
       >
-        <div
-          style={{
-            height: 72,
-            margin: '8px 14px 4px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-          }}
-        >
+        <Tooltip title={collapsed ? 'Show menu' : 'Hide menu'} placement="right" trigger="hover">
+          <button
+            type="button"
+            className="la-sider-toggle"
+            aria-label={collapsed ? 'Show menu' : 'Hide menu'}
+            aria-expanded={!collapsed}
+            onClick={toggleNav}
+          >
+            {collapsed ? <RightOutlined /> : <LeftOutlined />}
+          </button>
+        </Tooltip>
+
+        <div className="la-sider-brand">
           <div className="la-brand-mark" aria-hidden>
             <BrandLogo size={36} />
           </div>
-          <div style={{ overflow: 'hidden' }}>
-            <div className="display" style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>
-              {appName}
-            </div>
-            <div
-              style={{ fontSize: 11, color: 'var(--la-muted)', marginTop: 2 }}
-              title={hostname || undefined}
-            >
+          <div className="la-sider-brand-copy">
+            <div className="display la-sider-app">{appName}</div>
+            <div className="la-sider-host" title={hostname || undefined}>
               {hostname || '…'}
             </div>
           </div>
@@ -264,13 +313,16 @@ export function AppLayout({ dark, onToggleTheme }: Props) {
           />
         )}
 
-        <div style={{ padding: '12px 16px 20px', borderTop: '1px solid var(--la-panel-border)' }}>
-          <div style={{ fontSize: 11, color: 'var(--la-muted)', marginBottom: 4 }}>
-            {profile?.role?.name || (profile?.is_superadmin ? 'Super Admin' : 'session')}
+        <div className="la-sider-foot">
+          <div className="la-sider-avatar" title={who} aria-hidden>
+            {initial}
           </div>
-          <Typography.Text ellipsis style={{ display: 'block', fontWeight: 600 }}>
-            {profile?.display_name || username}
-          </Typography.Text>
+          <div className="la-sider-foot-copy">
+            <div className="la-sider-role">{roleLabel}</div>
+            <Typography.Text ellipsis style={{ display: 'block', fontWeight: 600 }}>
+              {who}
+            </Typography.Text>
+          </div>
         </div>
       </Sider>
 

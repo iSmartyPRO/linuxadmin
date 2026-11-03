@@ -37,7 +37,7 @@ export function ModuleDocsButton({ docKey, label = 'Docs' }: { docKey: string; l
   return (
     <>
       <Button icon={<QuestionCircleOutlined />} onClick={() => void load()}>
-        {label}
+        <span className="fm-header-label">{label}</span>
       </Button>
       <Drawer
         title={doc?.title || 'Documentation'}

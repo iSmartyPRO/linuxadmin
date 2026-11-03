@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import mimetypes
+import time
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +41,23 @@ class MoveBody(BaseModel):
     rel: str
     dest_rel: str = ""
     name: str | None = None
+
+
+class MkdirsBody(BaseModel):
+    root_id: str
+    rel: str = ""
+    paths: list[str] = Field(default_factory=list, max_length=4000)
+
+
+class PackBody(BaseModel):
+    root_id: str
+    rel: str = Field(min_length=1)
+    format: str = "zip"
+
+
+class ExtractBody(BaseModel):
+    root_id: str
+    rel: str = Field(min_length=1)
 
 
 async def _mod(db: AsyncSession) -> dict:
@@ -145,6 +164,16 @@ async def write_text(
     return await _call(fileman.write_text, mod, body.root_id, body.rel, body.content)
 
 
+@router.post("/mkdirs")
+async def mkdirs(
+    body: MkdirsBody,
+    db: AsyncSession = Depends(get_db),
+    _: Principal = Depends(require_module("files", "full")),
+):
+    mod = await _mod(db)
+    return await _call(fileman.ensure_dirs, mod, body.root_id, body.rel, body.paths)
+
+
 @router.post("/mkdir")
 async def mkdir(
     body: NameBody,
@@ -184,6 +213,71 @@ async def delete_entry(
 ):
     mod = await _mod(db)
     return await _call(fileman.delete_path, mod, root_id, rel)
+
+
+def _progress_stream(work):
+    """Run a blocking archive job and stream percent updates as JSON lines."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    state = {"pct": -1, "ts": 0.0}
+
+    def on_progress(done: int, total: int, label: str) -> None:
+        pct = 0 if total <= 0 else min(99, int(done * 100 / total))
+        now = time.monotonic()
+        if pct == state["pct"] and now - state["ts"] < 0.08:
+            return
+        state["pct"] = pct
+        state["ts"] = now
+        loop.call_soon_threadsafe(
+            queue.put_nowait,
+            {"type": "progress", "pct": pct, "done": done, "total": total, "label": label},
+        )
+
+    async def run() -> None:
+        try:
+            result = await asyncio.to_thread(work, on_progress)
+            await queue.put({"type": "done", "pct": 100, **result})
+        except fileman.FileManError as exc:
+            await queue.put({"type": "error", "detail": exc.message})
+        except Exception:
+            await queue.put({"type": "error", "detail": "Archive operation failed"})
+        finally:
+            await queue.put(None)
+
+    task = asyncio.create_task(run())
+
+    async def generate():
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield json.dumps(item, ensure_ascii=False) + "\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
+@router.post("/pack")
+async def pack_archive(
+    body: PackBody,
+    db: AsyncSession = Depends(get_db),
+    _: Principal = Depends(require_module("files", "full")),
+):
+    mod = await _mod(db)
+    return _progress_stream(lambda on_progress: fileman.pack_path(mod, body.root_id, body.rel, body.format, on_progress))
+
+
+@router.post("/extract")
+async def extract_archive(
+    body: ExtractBody,
+    db: AsyncSession = Depends(get_db),
+    _: Principal = Depends(require_module("files", "full")),
+):
+    mod = await _mod(db)
+    return _progress_stream(lambda on_progress: fileman.extract_path(mod, body.root_id, body.rel, on_progress))
 
 
 @router.post("/upload")

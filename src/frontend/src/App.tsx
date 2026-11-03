@@ -236,7 +236,7 @@ function Shell() {
               }
             />
             <Route
-              path="files/:rootId"
+              path="files/:rootId/*"
               element={
                 <ModuleGate module="files">
                   <FileManagerPage />

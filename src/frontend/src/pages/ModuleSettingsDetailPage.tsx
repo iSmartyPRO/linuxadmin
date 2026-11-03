@@ -393,6 +393,17 @@ function settingError(e: unknown): string {
 
 type MountDraft = { id: string; name: string; path: string; read_only?: boolean }
 
+/** 12 hex chars. crypto.randomUUID exists only in a secure context (HTTPS or localhost). */
+function newMountId(): string {
+  const bytes = new Uint8Array(6)
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes)
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 function FilesMountEditor({
   mod,
   patch,
@@ -431,6 +442,32 @@ function FilesMountEditor({
     <>
       <FineSwitch label="Allow changes (create, upload, edit, rename, move, delete)" checked={!!mod.allow_mutations} onChange={(v) => patch({ allow_mutations: v })} />
       <FineSwitch label="Show hidden files by default" checked={!!mod.show_hidden} onChange={(v) => patch({ show_hidden: v })} />
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          padding: '8px 0',
+          borderBottom: '1px solid var(--la-panel-border)',
+        }}
+      >
+        <span style={{ fontSize: 13 }}>
+          Open files and folders
+          <div style={{ color: 'var(--la-muted)', fontSize: 12, marginTop: 2 }}>
+            Default for this server. The Files toolbar can remember a different choice in this browser.
+          </div>
+        </span>
+        <Select
+          value={mod.open_click === 'single' ? 'single' : 'double'}
+          style={{ width: 160, flex: 'none' }}
+          options={[
+            { value: 'double', label: 'Double click' },
+            { value: 'single', label: 'Single click' },
+          ]}
+          onChange={(value) => patch({ open_click: value })}
+        />
+      </div>
       <NumberRow label="Preview limit (MB)" value={mod.max_preview_mb ?? 2} min={1} max={8} onChange={(v) => patch({ max_preview_mb: v || 2 })} />
       <NumberRow label="Upload limit (MB)" value={mod.max_upload_mb ?? 50} min={1} max={200} onChange={(v) => patch({ max_upload_mb: v || 50 })} />
       <Typography.Paragraph type="secondary" style={{ marginTop: 14 }}>
@@ -473,7 +510,7 @@ function FilesMountEditor({
           update([
             ...roots,
             {
-              id: crypto.randomUUID().replace(/-/g, '').slice(0, 12),
+              id: newMountId(),
               name: '',
               path: '',
               read_only: false,

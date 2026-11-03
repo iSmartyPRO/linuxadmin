@@ -90,7 +90,18 @@ async def lifespan(app: FastAPI):
 def _mount_frontend(app: FastAPI, dist: Path) -> None:
     assets = dist / "assets"
     if assets.is_dir():
-        app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+
+        class ImmutableAssets(StaticFiles):
+            async def get_response(self, path: str, scope):  # type: ignore[no-untyped-def]
+                response = await super().get_response(path, scope)
+                if getattr(response, "status_code", None) == 200:
+                    response.headers.setdefault(
+                        "Cache-Control",
+                        "public, max-age=31536000, immutable",
+                    )
+                return response
+
+        app.mount("/assets", ImmutableAssets(directory=str(assets)), name="assets")
 
     index = dist / "index.html"
 
@@ -98,7 +109,10 @@ def _mount_frontend(app: FastAPI, dist: Path) -> None:
     async def spa_index():
         if not index.is_file():
             raise HTTPException(status_code=404, detail="Frontend not built (run: make build)")
-        return FileResponse(index)
+        return FileResponse(
+            index,
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     @app.get("/{full_path:path}")
     async def spa_fallback(full_path: str):
@@ -106,10 +120,16 @@ def _mount_frontend(app: FastAPI, dist: Path) -> None:
             raise HTTPException(status_code=404, detail="Not found")
         candidate = dist / full_path
         if candidate.is_file() and dist in candidate.resolve().parents:
-            return FileResponse(candidate)
+            headers = {}
+            if candidate.parent.name == "assets":
+                headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            return FileResponse(candidate, headers=headers)
         if not index.is_file():
             raise HTTPException(status_code=404, detail="Frontend not built (run: make build)")
-        return FileResponse(index)
+        return FileResponse(
+            index,
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
 
 def create_app() -> FastAPI:

@@ -7,10 +7,15 @@ import re
 import shutil
 import stat
 import tempfile
+import tarfile
 import uuid
+import zipfile
 from datetime import datetime, timezone
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+ProgressFn = Callable[[int, int, str], None]
 
 _ID_RE = re.compile(r"^[a-z0-9]{6,32}$")
 _BLOCKED_PREFIXES = ("/proc", "/sys", "/dev", "/run", "/boot")
@@ -18,6 +23,8 @@ _BLOCKED_PREFIXES = ("/proc", "/sys", "/dev", "/run", "/boot")
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".avif", ".svg"}
 MARKDOWN_EXT = {".md", ".mdx", ".markdown"}
 PDF_EXT = {".pdf"}
+DOCX_EXT = {".docx"}
+XLSX_EXT = {".xlsx"}
 AUDIO_EXT = {".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"}
 VIDEO_EXT = {".mp4", ".webm", ".ogv", ".mov", ".mkv"}
 TEXT_EXT = {
@@ -35,6 +42,11 @@ TEXT_NAMES = {
 _HARD_TEXT_CAP = 8 * 1024 * 1024
 _HARD_UPLOAD_CAP = 200 * 1024 * 1024
 _MAX_LIST = 4000
+_MAX_ARCHIVE_FILES = 4000
+_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+_ARCHIVE_SUFFIXES = (
+    ".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz", ".zip", ".tar",
+)
 
 
 class FileManError(Exception):
@@ -349,6 +361,10 @@ def classify(name: str) -> dict[str, Any]:
         preview = "image"
     elif ext in PDF_EXT:
         preview = "pdf"
+    elif ext in DOCX_EXT:
+        preview = "docx"
+    elif ext in XLSX_EXT:
+        preview = "xlsx"
     elif ext in MARKDOWN_EXT:
         preview = "markdown"
     elif ext in AUDIO_EXT:
@@ -499,15 +515,77 @@ def _require_write(mod: dict[str, Any], root: dict[str, Any]) -> None:
         raise FileManError("The server user cannot write to this folder", 403)
 
 
-def _unique_name(directory: Path, name: str) -> str:
+def _component_limit(directory: Path) -> int:
+    """Bytes allowed in one filename on this directory's filesystem.
+
+    Linux NAME_MAX is 255 bytes, not characters. Cyrillic UTF-8 uses two bytes
+    per letter, and encrypted home directories can be tighter still.
+    """
+    try:
+        limit = os.pathconf(directory, "PC_NAME_MAX")
+    except (OSError, ValueError):
+        return 255
+    if not isinstance(limit, int) or limit < 16:
+        return 255
+    return min(limit, 255)
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    if max_bytes <= 0:
+        return ""
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text
+    raw = raw[:max_bytes]
+    while raw:
+        try:
+            return raw.decode("utf-8").rstrip(" .")
+        except UnicodeDecodeError:
+            raw = raw[:-1]
+    return ""
+
+
+def _filename_suffix(name: str) -> tuple[str, str]:
+    archive = _archive_suffix(name)
+    if archive:
+        return name[: -len(archive)], archive
+    dot = name.rfind(".")
+    if dot <= 0 or dot >= len(name) - 1:
+        return name, ""
+    ext = name[dot:]
+    if len(ext.encode("utf-8")) > 32:
+        return name, ""
+    return name[:dot], ext
+
+
+def _fit_filename(name: str, max_bytes: int) -> str:
+    text = name.strip()
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text
+    stem, ext = _filename_suffix(text)
+    if len(ext.encode("utf-8")) >= max_bytes:
+        stem, ext = text, ""
+    fitted = _truncate_utf8(stem, max_bytes - len(ext.encode("utf-8")))
+    if not fitted or fitted in {".", ".."}:
+        fitted = "file"
+        if len((fitted + ext).encode("utf-8")) > max_bytes:
+            ext = ""
+    return fitted + ext
+
+
+def _unique_name(directory: Path, name: str, max_bytes: int | None = None) -> str:
+    limit = _component_limit(directory) if max_bytes is None else max_bytes
+    name = _fit_filename(name, limit)
     candidate = directory / name
-    if not candidate.exists():
+    if not candidate.exists() and not candidate.is_symlink():
         return name
     stem = Path(name).stem
     suffix = Path(name).suffix
     for n in range(2, 100):
-        alt = f"{stem} ({n}){suffix}"
-        if not (directory / alt).exists():
+        marker = f" ({n})"
+        room = limit - len(marker.encode("utf-8")) - len(suffix.encode("utf-8"))
+        alt = f"{_truncate_utf8(stem, room) or 'file'}{marker}{suffix}"
+        if not (directory / alt).exists() and not (directory / alt).is_symlink():
             return alt
     raise FileManError("Too many files with the same name")
 
@@ -556,6 +634,82 @@ def write_text(mod: dict[str, Any], root_id: str, rel: str, content: str) -> dic
     except OSError as exc:
         raise FileManError(f"Cannot save file: {exc}") from exc
     return {"ok": True, "rel": _rel_of(root_real, path), "size": len(data)}
+
+
+def _ensure_dirs_under(root_real: Path, parent: Path, rel: str) -> None:
+    """Create every missing directory in rel under parent. Existing directories are kept."""
+    current = parent
+    for part in _split_rel(rel):
+        clean_name(part)
+        candidate = current / part
+        try:
+            lst = candidate.lstat()
+        except FileNotFoundError:
+            lst = None
+        if lst is None:
+            try:
+                parent_real = current.resolve(strict=True)
+            except OSError as exc:
+                raise FileManError(f"Cannot create folder: {exc}") from exc
+            if not _inside(root_real, parent_real):
+                raise FileManError("Path escapes the mounted folder", 403)
+            try:
+                candidate.mkdir()
+            except FileExistsError:
+                try:
+                    lst = candidate.lstat()
+                except OSError as exc:
+                    raise FileManError(f"Cannot create folder: {exc}") from exc
+            except OSError as exc:
+                raise FileManError(f"Cannot create folder: {exc}") from exc
+            else:
+                current = candidate
+                continue
+        if lst is None:
+            raise FileManError("Cannot create folder")
+        if stat.S_ISLNK(lst.st_mode):
+            try:
+                target = Path(os.path.realpath(candidate))
+            except OSError as exc:
+                raise FileManError(f"Broken link: {exc}") from exc
+            if not target.is_dir() or not _inside(root_real, target):
+                raise FileManError("Symbolic link points outside the mounted folder", 403)
+            current = target
+            continue
+        if not stat.S_ISDIR(lst.st_mode):
+            raise FileManError("An item with that name already exists")
+        try:
+            current = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise FileManError(f"Cannot create folder: {exc}") from exc
+        if not _inside(root_real, current):
+            raise FileManError("Path escapes the mounted folder", 403)
+
+
+def ensure_dirs(mod: dict[str, Any], root_id: str, parent_rel: str, paths: list[str]) -> dict[str, Any]:
+    """Create nested folders inside a mount. Used when a whole directory is uploaded."""
+    if not isinstance(paths, list) or len(paths) > 4000:
+        raise FileManError("Too many folders in one upload")
+    root = _root_record(mod, root_id)
+    _require_write(mod, root)
+    root_real = Path(root["path"]).resolve(strict=True)
+    parent = resolve_rel(root_real, parent_rel, expect="dir")
+    seen: set[str] = set()
+    ordered = sorted((str(raw) for raw in paths), key=lambda item: (item.count("/"), item))
+    for raw in ordered:
+        if len(raw) > 4096:
+            raise FileManError("Invalid folder path")
+        parts = _split_rel(raw)
+        if not parts:
+            continue
+        if len(parts) > 48:
+            raise FileManError("Folder path is too deep")
+        key = "/".join(parts)
+        if key in seen:
+            continue
+        seen.add(key)
+        _ensure_dirs_under(root_real, parent, key)
+    return {"ok": True, "count": len(seen)}
 
 
 def make_dir(mod: dict[str, Any], root_id: str, parent_rel: str, name: str) -> dict[str, Any]:
@@ -682,3 +836,461 @@ def save_upload(mod: dict[str, Any], root_id: str, parent_rel: str, filename: st
     except OSError as exc:
         raise FileManError(f"Cannot upload file: {exc}") from exc
     return {"ok": True, "rel": _rel_of(root_real, dest), "name": name, "size": len(data)}
+
+
+def _archive_suffix(name: str) -> str | None:
+    lower = name.lower()
+    for suffix in _ARCHIVE_SUFFIXES:
+        if lower.endswith(suffix):
+            return suffix
+    return None
+
+
+def _archive_stem(name: str) -> str:
+    suffix = _archive_suffix(name)
+    stem = name[: -len(suffix)] if suffix else Path(name).stem
+    stem = stem.strip()
+    if not stem or stem in {".", ".."}:
+        return "archive"
+    return stem
+
+
+def _unique_filename(directory: Path, filename: str, max_bytes: int | None = None) -> str:
+    limit = _component_limit(directory) if max_bytes is None else max_bytes
+    suffix = _archive_suffix(filename) or ""
+    if not suffix:
+        return _unique_name(directory, filename, limit)
+    filename = _fit_filename(filename, limit)
+    suffix = _archive_suffix(filename) or ""
+    if not (directory / filename).exists() and not (directory / filename).is_symlink():
+        return filename
+    stem = filename[: -len(suffix)] if suffix else filename
+    for n in range(2, 100):
+        marker = f" ({n})"
+        room = limit - len(marker.encode("utf-8")) - len(suffix.encode("utf-8"))
+        alt = f"{_truncate_utf8(stem, room) or 'archive'}{marker}{suffix}"
+        if not (directory / alt).exists() and not (directory / alt).is_symlink():
+            return alt
+    raise FileManError("Too many files with the same name")
+
+
+def _node_in_root(root_real: Path, rel: str) -> Path:
+    parts = _split_rel(rel)
+    if not parts:
+        raise FileManError("Choose a file or folder")
+    parent = resolve_rel(root_real, "/".join(parts[:-1]), expect="dir")
+    source = parent / parts[-1]
+    try:
+        lst = source.lstat()
+    except FileNotFoundError as exc:
+        raise FileManError("Path does not exist", 404) from exc
+    if stat.S_ISLNK(lst.st_mode):
+        raise FileManError("Symbolic links cannot be packed or extracted", 403)
+    if not _inside(root_real, source.resolve(strict=True)):
+        raise FileManError("Path escapes the mounted folder", 403)
+    return source
+
+
+def _iter_pack(root_real: Path, source: Path) -> tuple[list[tuple[Path, str]], list[str], int]:
+    """Return (files as path/arcname, directory arcnames, total bytes). Symlinks are skipped."""
+    files: list[tuple[Path, str]] = []
+    dirs: list[str] = []
+    total = 0
+    prefix = source.name
+
+    def add_file(path: Path, arcname: str) -> None:
+        nonlocal total
+        if path.is_symlink() or not path.is_file():
+            return
+        real = path.resolve(strict=True)
+        if not _inside(root_real, real):
+            raise FileManError("Path escapes the mounted folder", 403)
+        size = path.stat().st_size
+        if size > _MAX_ARCHIVE_BYTES or total + size > _MAX_ARCHIVE_BYTES:
+            raise FileManError("Folder is too large to pack", 413)
+        total += size
+        if len(files) >= _MAX_ARCHIVE_FILES:
+            raise FileManError("Too many files to pack")
+        files.append((path, arcname))
+
+    if source.is_file():
+        add_file(source, prefix)
+        return files, dirs, total
+    if not source.is_dir():
+        raise FileManError("Only a file or folder can be packed")
+
+    dirs.append(f"{prefix}/")
+    for dirpath, dirnames, filenames in os.walk(source, followlinks=False):
+        current = Path(dirpath)
+        kept: list[str] = []
+        for dirname in dirnames:
+            child = current / dirname
+            if child.is_symlink():
+                continue
+            try:
+                if not child.is_dir() or not _inside(root_real, child.resolve(strict=True)):
+                    continue
+            except OSError:
+                continue
+            kept.append(dirname)
+            rel = child.relative_to(source).as_posix()
+            dirs.append(f"{prefix}/{rel}/")
+        dirnames[:] = kept
+        for filename in filenames:
+            path = current / filename
+            try:
+                rel = path.relative_to(source).as_posix()
+            except ValueError as exc:
+                raise FileManError("Path escapes the mounted folder", 403) from exc
+            add_file(path, f"{prefix}/{rel}")
+    return files, dirs, total
+
+
+def _write_zip_member(archive: zipfile.ZipFile, path: Path, arcname: str, on_chunk: Callable[[int], None]) -> None:
+    info = zipfile.ZipInfo(arcname)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.flag_bits |= 0x800
+    with path.open("rb") as src, archive.open(info, "w") as dest:
+        while True:
+            buf = src.read(256 * 1024)
+            if not buf:
+                break
+            dest.write(buf)
+            on_chunk(len(buf))
+
+
+def _write_tar_member(archive: tarfile.TarFile, path: Path, arcname: str, on_chunk: Callable[[int], None]) -> None:
+    info = archive.gettarinfo(str(path), arcname=arcname)
+    with path.open("rb") as src:
+        archive.addfile(info, _ChunkReader(src, on_chunk))
+
+
+class _ChunkReader:
+    def __init__(self, raw, on_chunk: Callable[[int], None]):
+        self._raw = raw
+        self._on_chunk = on_chunk
+
+    def read(self, n: int = -1) -> bytes:
+        buf = self._raw.read(256 * 1024 if n is None or n < 0 else n)
+        if buf:
+            self._on_chunk(len(buf))
+        return buf
+
+
+class _ByteCounter:
+    """File-like wrapper that reports how much of an archive has been read."""
+
+    def __init__(self, raw, size: int, on_progress: ProgressFn | None, label: str):
+        self._raw = raw
+        self.size = max(size, 1)
+        self._on_progress = on_progress
+        self.label = label
+        self._last_pct = -1
+
+    def _emit(self, force: bool = False) -> None:
+        if not self._on_progress:
+            return
+        pos = self._raw.tell()
+        pct = int(pos * 100 / self.size)
+        if not force and pct == self._last_pct:
+            return
+        self._last_pct = pct
+        self._on_progress(pos, self.size, self.label)
+
+    def read(self, n: int = -1) -> bytes:
+        buf = self._raw.read(n)
+        self._emit()
+        return buf
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        pos = self._raw.seek(offset, whence)
+        self._emit()
+        return pos
+
+    def tell(self) -> int:
+        return self._raw.tell()
+
+    def seekable(self) -> bool:
+        return True
+
+    def readable(self) -> bool:
+        return True
+
+    def close(self) -> None:
+        self._raw.close()
+
+
+def pack_path(
+    mod: dict[str, Any],
+    root_id: str,
+    rel: str,
+    fmt: str,
+    on_progress: ProgressFn | None = None,
+) -> dict[str, Any]:
+    kind = (fmt or "zip").strip().lower()
+    if kind not in {"zip", "tar.gz"}:
+        raise FileManError("Choose zip or tar.gz")
+    root = _root_record(mod, root_id)
+    _require_write(mod, root)
+    root_real = Path(root["path"]).resolve(strict=True)
+    source = _node_in_root(root_real, rel)
+    parent = source.parent
+    files, dirs, total_bytes = _iter_pack(root_real, source)
+    suffix = ".zip" if kind == "zip" else ".tar.gz"
+    filename = _unique_filename(parent, f"{source.name}{suffix}")
+    dest = parent / filename
+    tmp = parent / f".{filename}.lnxadmin-up"
+    packed = 0
+
+    def tick(amount: int, label: str) -> None:
+        nonlocal packed
+        packed += amount
+        if on_progress:
+            on_progress(packed, total_bytes, label)
+
+    if on_progress:
+        on_progress(0, total_bytes, source.name)
+    try:
+        if kind == "zip":
+            with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
+                for arcname in dirs:
+                    archive.writestr(arcname, "")
+                for path, arcname in files:
+                    _write_zip_member(archive, path, arcname, lambda n, name=path.name: tick(n, name))
+        else:
+            with tarfile.open(tmp, "w:gz") as archive:
+                for arcname in dirs:
+                    info = tarfile.TarInfo(arcname)
+                    info.type = tarfile.DIRTYPE
+                    info.mode = 0o755
+                    archive.addfile(info)
+                for path, arcname in files:
+                    _write_tar_member(archive, path, arcname, lambda n, name=path.name: tick(n, name))
+        os.replace(tmp, dest)
+    except FileManError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    except OSError as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise FileManError(f"Cannot pack archive: {exc}") from exc
+    if not _inside(root_real, dest.resolve(strict=True)):
+        raise FileManError("Path escapes the mounted folder", 403)
+    return {"ok": True, "rel": _rel_of(root_real, dest), "name": filename, "size": dest.stat().st_size}
+
+
+def _zip_is_symlink(info: zipfile.ZipInfo) -> bool:
+    return stat.S_ISLNK(info.external_attr >> 16)
+
+
+def _stream_member(fd: int, reader, total: int) -> int:
+    written = 0
+    while True:
+        buf = reader.read(1024 * 1024)
+        if not buf:
+            break
+        written += len(buf)
+        if written > _MAX_ARCHIVE_BYTES or total + written > _MAX_ARCHIVE_BYTES:
+            raise FileManError("Archive is too large to extract", 413)
+        os.write(fd, buf)
+    return written
+
+
+def _archive_parts(rel: str) -> list[str]:
+    try:
+        parts = _split_rel(rel)
+    except FileManError as exc:
+        raise FileManError("Archive contains an unsafe path") from exc
+    if len(parts) > 48:
+        raise FileManError("Archive contains an unsafe path")
+    return parts
+
+
+def _fit_archive_parts(
+    parts: list[str],
+    used: dict[tuple[str, ...], tuple[str, ...]],
+    limit: int,
+    renamed: list[int],
+) -> list[str]:
+    """Shorten each archive path component so it fits NAME_MAX, stably for this extract."""
+    fitted: list[str] = []
+    for index, part in enumerate(parts):
+        key = tuple(parts[: index + 1])
+        cached = used.get(key)
+        if cached is not None:
+            fitted = list(cached)
+            continue
+        text = part.strip()
+        if (
+            not text
+            or text in {".", ".."}
+            or "/" in text
+            or "\\" in text
+            or "\x00" in text
+            or any(ord(ch) < 32 for ch in text)
+        ):
+            raise FileManError("Archive contains an unsafe path")
+        safe = _fit_filename(text, limit)
+        taken = {
+            item[-1]
+            for item in used.values()
+            if len(item) == index + 1 and item[:-1] == tuple(fitted)
+        }
+        changed = safe != text
+        if safe in taken:
+            changed = True
+            for n in range(2, 1000):
+                marker = f" ({n})"
+                stem, ext = _filename_suffix(safe)
+                room = limit - len(marker.encode("utf-8")) - len(ext.encode("utf-8"))
+                alt = f"{_truncate_utf8(stem, room) or 'file'}{marker}{ext}"
+                if alt not in taken and len(alt.encode("utf-8")) <= limit:
+                    safe = alt
+                    break
+            else:
+                raise FileManError("Too many files with the same name")
+        if changed:
+            renamed[0] += 1
+        fitted.append(safe)
+        used[key] = tuple(fitted)
+    return fitted
+
+
+def _extract_file(root_real: Path, folder: Path, rel: str, reader, total: int, name_limit: int) -> int:
+    parts = _archive_parts(rel)
+    if not parts:
+        raise FileManError("Archive contains an unsafe path")
+    parent_rel = "/".join(parts[:-1])
+    if parent_rel:
+        _ensure_dirs_under(root_real, folder, parent_rel)
+    parent = folder.joinpath(*parts[:-1]) if len(parts) > 1 else folder
+    parent_real = parent.resolve(strict=True)
+    if not _inside(root_real, parent_real):
+        raise FileManError("Path escapes the mounted folder", 403)
+    name = _unique_filename(parent_real, clean_name(parts[-1]), name_limit)
+    target = parent_real / name
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(target, flags, 0o644)
+    try:
+        return _stream_member(fd, reader, total)
+    except Exception:
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def extract_path(
+    mod: dict[str, Any],
+    root_id: str,
+    rel: str,
+    on_progress: ProgressFn | None = None,
+) -> dict[str, Any]:
+    root = _root_record(mod, root_id)
+    _require_write(mod, root)
+    root_real = Path(root["path"]).resolve(strict=True)
+    source = _node_in_root(root_real, rel)
+    if not source.is_file():
+        raise FileManError("Choose an archive file")
+    if source.stat().st_size > _MAX_ARCHIVE_BYTES:
+        raise FileManError("Archive is too large to extract", 413)
+    suffix = _archive_suffix(source.name)
+    if suffix is None:
+        raise FileManError("This file is not a supported archive (zip, tar, tar.gz, tar.bz2, tar.xz)")
+    parent = source.parent
+    name_limit = _component_limit(parent)
+    folder_name = _unique_filename(parent, clean_name(_archive_stem(source.name)), name_limit)
+    dest = parent / folder_name
+    dest.mkdir()
+    files = 0
+    total = 0
+    skipped = 0
+    renamed = [0]
+    fitted_paths: dict[tuple[str, ...], tuple[str, ...]] = {}
+    raw = source.open("rb")
+    counter = _ByteCounter(raw, source.stat().st_size, on_progress, source.name)
+    try:
+        if suffix == ".zip":
+            with zipfile.ZipFile(counter) as archive:
+                for info in archive.infolist():
+                    if info.flag_bits & 0x1:
+                        raise FileManError("Encrypted archives are not supported")
+                    if _zip_is_symlink(info):
+                        skipped += 1
+                        continue
+                    name = info.filename.replace("\\", "/")
+                    member_parts = _fit_archive_parts(_archive_parts(name), fitted_paths, name_limit, renamed)
+                    fitted_name = "/".join(member_parts)
+                    if name.endswith("/"):
+                        if fitted_name:
+                            _ensure_dirs_under(root_real, dest, fitted_name)
+                        continue
+                    if files >= _MAX_ARCHIVE_FILES:
+                        raise FileManError("Archive has too many files")
+                    counter.label = member_parts[-1] if member_parts else source.name
+                    counter._emit(force=True)
+                    with archive.open(info, "r") as reader:
+                        total += _extract_file(root_real, dest, fitted_name, reader, total, name_limit)
+                    files += 1
+        else:
+            mode = {".tar": "r:", ".tar.gz": "r:gz", ".tgz": "r:gz", ".tar.bz2": "r:bz2", ".tbz2": "r:bz2", ".tar.xz": "r:xz", ".txz": "r:xz"}[suffix]
+            with tarfile.open(fileobj=counter, mode=mode) as archive:
+                for member in archive:
+                    if member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
+                        skipped += 1
+                        continue
+                    member_name = member.name.replace("\\", "/")
+                    member_parts = _fit_archive_parts(_archive_parts(member_name), fitted_paths, name_limit, renamed)
+                    fitted_name = "/".join(member_parts)
+                    if member.isdir():
+                        if fitted_name:
+                            _ensure_dirs_under(root_real, dest, fitted_name)
+                        continue
+                    if member.size < 0 or member.size > _MAX_ARCHIVE_BYTES or total + member.size > _MAX_ARCHIVE_BYTES:
+                        raise FileManError("Archive is too large to extract", 413)
+                    if files >= _MAX_ARCHIVE_FILES:
+                        raise FileManError("Archive has too many files")
+                    counter.label = member_parts[-1] if member_parts else source.name
+                    counter._emit(force=True)
+                    reader = archive.extractfile(member)
+                    if reader is None:
+                        skipped += 1
+                        continue
+                    with reader:
+                        total += _extract_file(root_real, dest, fitted_name, reader, total, name_limit)
+                    files += 1
+    except FileManError:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
+    except (OSError, tarfile.TarError, zipfile.BadZipFile, EOFError) as exc:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise FileManError(f"Cannot extract archive: {exc}") from exc
+    finally:
+        try:
+            raw.close()
+        except OSError:
+            pass
+    if not _inside(root_real, dest.resolve(strict=True)):
+        shutil.rmtree(dest, ignore_errors=True)
+        raise FileManError("Path escapes the mounted folder", 403)
+    return {
+        "ok": True,
+        "rel": _rel_of(root_real, dest),
+        "name": folder_name,
+        "files": files,
+        "skipped": skipped,
+        "renamed": renamed[0],
+    }

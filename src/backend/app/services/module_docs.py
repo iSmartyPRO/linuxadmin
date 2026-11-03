@@ -209,13 +209,17 @@ A jailed file browser. In **Settings → Modules → File Manager** you mount on
 
 ## Capabilities
 - Tree of folders plus an icon grid or detail list
+- Select several items with Shift+click, Ctrl+click, a drag box, or Shift+arrow keys, then move, pack, extract, or delete them together
+- Open with a double click, or switch to a single click in the Files toolbar or in these settings
 - Preview images, PDF, audio, and video; read and edit Markdown and text in place
-- Create files and folders, upload, rename, move (including drag-and-drop), and delete
+- Create files and folders, upload files or a whole folder (drag it from the desktop), rename, move, and delete
+- Pack a file or folder into zip or tar.gz, and extract zip, tar, tar.gz, tar.bz2, and tar.xz into a new folder
 - Per-folder read-only flag
 
 ## Settings
 - **Allow changes** — required before create, upload, edit, rename, move, or delete
 - **Show hidden files** — names starting with `.`
+- **Open files and folders** — double click, or a single click. The Files toolbar can override this on the current browser
 - **Mounted folders** — display name, absolute path (Browse from `/`), optional read-only
 - Preview and upload size limits
 

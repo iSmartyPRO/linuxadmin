@@ -66,6 +66,110 @@ export async function api<T = unknown>(
   return res.json() as Promise<T>
 }
 
+function authHeader(): string | null {
+  const token = getToken()
+  return token ? `Bearer ${token}` : null
+}
+
+function failStatus(status: number, body: string): Error {
+  if (status === 401) {
+    clearToken()
+    if (!window.location.pathname.startsWith('/login')) window.location.href = '/login'
+    return new Error('Unauthorized')
+  }
+  return new Error(body || `Request failed (${status})`)
+}
+
+/** Multipart upload with real byte progress (fetch cannot report upload progress). */
+export function apiUpload(
+  path: string,
+  body: FormData,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', path)
+    const auth = authHeader()
+    if (auth) xhr.setRequestHeader('Authorization', auth)
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress) return
+      const total = event.lengthComputable ? event.total : 0
+      onProgress(event.loaded, total)
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (!xhr.responseText) {
+          resolve(undefined)
+          return
+        }
+        try {
+          resolve(JSON.parse(xhr.responseText))
+        } catch {
+          resolve(undefined)
+        }
+        return
+      }
+      reject(failStatus(xhr.status, xhr.responseText))
+    }
+    xhr.onerror = () => reject(new Error('Failed to fetch'))
+    xhr.send(body)
+  })
+}
+
+export type StreamProgress = {
+  type: string
+  pct?: number
+  done?: number
+  total?: number
+  label?: string
+  detail?: string
+  name?: string
+  rel?: string
+  skipped?: number
+}
+
+/** POST JSON and read newline-delimited progress events. Resolves with the done event. */
+export async function apiNdjson<T>(
+  path: string,
+  body: unknown,
+  onProgress: (event: StreamProgress) => void,
+): Promise<T> {
+  const headers = new Headers({ 'Content-Type': 'application/json' })
+  const auth = authHeader()
+  if (auth) headers.set('Authorization', auth)
+  const res = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) })
+  if (res.status === 401) {
+    clearToken()
+    if (!window.location.pathname.startsWith('/login')) window.location.href = '/login'
+    throw new Error('Unauthorized')
+  }
+  if (!res.ok) {
+    throw new Error((await res.text()) || res.statusText)
+  }
+  if (!res.body) throw new Error('No progress stream')
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let pending = ''
+  let doneEvent: T | null = null
+  while (true) {
+    const chunk = await reader.read()
+    if (chunk.done) break
+    pending += decoder.decode(chunk.value, { stream: true })
+    const lines = pending.split('\n')
+    pending = lines.pop() || ''
+    for (const line of lines) {
+      const text = line.trim()
+      if (!text) continue
+      const event = JSON.parse(text) as StreamProgress
+      if (event.type === 'error') throw new Error(event.detail || 'Archive operation failed')
+      if (event.type === 'progress') onProgress(event)
+      if (event.type === 'done') doneEvent = event as T
+    }
+  }
+  if (!doneEvent) throw new Error('Archive finished without a result')
+  return doneEvent
+}
+
 /** Authenticated binary download (ZIP, etc.). Returns blob + filename hint. */
 export async function apiDownload(
   path: string,

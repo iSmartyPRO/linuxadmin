@@ -143,6 +143,7 @@ const DEFAULT_MODULES: ModulesConfig = {
     enabled: true,
     allow_mutations: false,
     show_hidden: false,
+    open_click: 'double',
     max_preview_mb: 2,
     max_upload_mb: 50,
     roots: [],
