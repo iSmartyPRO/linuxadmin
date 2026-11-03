@@ -150,6 +150,10 @@ DEFAULT_MODULES = {
         "record_history": False,  # opt-in: write connect/disconnect archive to DB
         "history_interval_seconds": 30,
         "online_handshake_seconds": 180,  # peer considered online if handshake newer than this
+        # Named AllowedIPs sets offered as route modes "tpl:<key>" (edited in Settings)
+        "route_templates": [],
+        "default_route_mode": "vpn_only",
+        "default_dns_mode": "none",
     },
     "openvpn": {
         "enabled": True,

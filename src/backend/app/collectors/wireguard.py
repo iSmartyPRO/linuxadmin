@@ -77,7 +77,61 @@ def _opts(options: dict[str, Any] | None) -> dict[str, Any]:
         "record_history": bool(o.get("record_history", False)),
         "history_interval_seconds": int(o.get("history_interval_seconds") or 30),
         "online_handshake_seconds": int(o.get("online_handshake_seconds") or 180),
+        "route_templates": _clean_route_templates(o.get("route_templates")),
+        "default_route_mode": str(o.get("default_route_mode") or "vpn_only").strip().lower(),
+        "default_dns_mode": str(o.get("default_dns_mode") or "none").strip().lower(),
     }
+
+
+TEMPLATE_PREFIX = "tpl:"
+TEMPLATE_KEY_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+
+
+def _clean_route_templates(raw: Any) -> list[dict[str, Any]]:
+    """Validate route templates from module settings; drop broken rows instead of failing."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in raw if isinstance(raw, list) else []:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("key") or "").strip().lower()
+        if not TEMPLATE_KEY_RE.fullmatch(key) or key in seen:
+            continue
+        ips: list[str] = []
+        for x in row.get("allowed_ips") or []:
+            try:
+                ips.append(str(ipaddress.ip_network(str(x).strip(), strict=False)))
+            except ValueError:
+                continue
+        if not ips:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "key": key,
+                "label": str(row.get("label") or key).strip()[:64],
+                "description": str(row.get("description") or "").strip()[:300],
+                "allowed_ips": ips,
+            }
+        )
+    return out
+
+
+def _route_templates(opts: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {TEMPLATE_PREFIX + t["key"]: t for t in opts.get("route_templates") or []}
+
+
+def _route_modes(opts: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Built-in presets plus templates from settings (templates listed first)."""
+    modes: dict[str, dict[str, Any]] = {}
+    for mode, t in _route_templates(opts).items():
+        modes[mode] = {
+            "label": t["label"],
+            "description": t["description"] or ", ".join(t["allowed_ips"]),
+            "allowed_ips": t["allowed_ips"],
+        }
+    modes.update(ROUTE_PRESETS)
+    return modes
 
 
 def _data_dir(opts: dict[str, Any]) -> Path:
@@ -501,8 +555,15 @@ def _resolve_allowed_ips(
     mode: str,
     custom: list[str] | None,
     server_cidr: str,
+    opts: dict[str, Any] | None = None,
 ) -> list[str]:
     mode = (mode or "vpn_only").lower()
+    if mode.startswith(TEMPLATE_PREFIX):
+        tpl = _route_templates(opts or {}).get(mode)
+        if not tpl:
+            raise ValueError(f"Route template '{mode[len(TEMPLATE_PREFIX):]}' not found")
+        net = _network_of(server_cidr)
+        return list(tpl["allowed_ips"]) if net in tpl["allowed_ips"] else [net, *tpl["allowed_ips"]]
     if mode == "custom":
         out = []
         for x in custom or []:
@@ -824,8 +885,14 @@ async def collect_overview(options: dict[str, Any] | None = None) -> dict[str, A
         "ip_map": ip_map,
         "route_presets": {
             k: {"label": v["label"], "description": v["description"]}
-            for k, v in ROUTE_PRESETS.items()
+            for k, v in _route_modes(opts).items()
         },
+        "default_route_mode": opts["default_route_mode"]
+        if opts["default_route_mode"] in _route_modes(opts)
+        else "vpn_only",
+        "default_dns_mode": opts["default_dns_mode"]
+        if opts["default_dns_mode"] in {"none", "server", "custom"}
+        else "none",
         "data_dir": opts["data_dir"],
     }
 
@@ -1120,14 +1187,15 @@ async def create_peer(body: dict[str, Any], options: dict[str, Any] | None = Non
         if not address:
             return {"ok": False, "error": "No free client addresses in server subnet"}
 
-    route_mode = (body.get("route_mode") or "vpn_only").lower()
-    if route_mode not in ROUTE_PRESETS:
+    route_mode = (body.get("route_mode") or opts["default_route_mode"] or "vpn_only").lower()
+    if route_mode not in _route_modes(opts):
         return {"ok": False, "error": "Invalid route mode"}
 
     allowed = _resolve_allowed_ips(
         route_mode,
         body.get("allowed_ips_client"),
         meta["address"],
+        opts,
     )
     if route_mode == "custom" and not allowed:
         return {"ok": False, "error": "Custom mode requires at least one AllowedIP"}
@@ -1223,13 +1291,14 @@ async def update_peer(
 
     if "route_mode" in body or "allowed_ips_client" in body:
         mode = (body.get("route_mode") or data.get("route_mode") or "vpn_only").lower()
-        if mode not in ROUTE_PRESETS:
+        if mode not in _route_modes(opts):
             return {"ok": False, "error": "Invalid route mode"}
         data["route_mode"] = mode
         data["allowed_ips_client"] = _resolve_allowed_ips(
             mode,
             body.get("allowed_ips_client", data.get("allowed_ips_client")),
             meta["address"],
+            opts,
         )
 
     data["updated_at"] = _now()
@@ -1283,6 +1352,10 @@ def build_client_config(
         listen_port,
     )
     allowed = peer.get("allowed_ips_client") or ["0.0.0.0/0", "::/0"]
+    mode = str(peer.get("route_mode") or "")
+    if mode.startswith(TEMPLATE_PREFIX) and mode in _route_templates(o):
+        # Template edits reach every peer on the next config download
+        allowed = _resolve_allowed_ips(mode, None, str(server.get("address") or ""), o)
     if isinstance(allowed, str):
         allowed_s = allowed
     else:

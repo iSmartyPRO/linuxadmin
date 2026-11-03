@@ -538,6 +538,139 @@ function FilesMountEditor({
   )
 }
 
+type RouteTemplateDraft = { key: string; label: string; description?: string; allowed_ips: string[] }
+
+function RouteTemplatesEditor({
+  mod,
+  patch,
+}: {
+  mod: Record<string, any>
+  patch: (p: Record<string, any>) => void
+}) {
+  const rows: RouteTemplateDraft[] = Array.isArray(mod.route_templates) ? mod.route_templates : []
+  const update = (next: RouteTemplateDraft[]) => patch({ route_templates: next })
+  const setRow = (index: number, p: Partial<RouteTemplateDraft>) =>
+    update(rows.map((row, i) => (i === index ? { ...row, ...p } : row)))
+  const routeOptions = [
+    ...rows.filter((r) => r.key).map((r) => ({ value: `tpl:${r.key}`, label: `${r.label || r.key} (template)` })),
+    { value: 'vpn_only', label: 'VPN subnet only' },
+    { value: 'split_lan', label: 'All private LANs (RFC1918)' },
+    { value: 'full', label: 'Full tunnel' },
+    { value: 'custom', label: 'Custom routes' },
+  ]
+
+  return (
+    <>
+      <div style={{ padding: '8px 0', borderBottom: '1px solid var(--la-panel-border)' }}>
+        <span style={{ fontSize: 13 }}>
+          Route templates
+          <div style={{ color: 'var(--la-muted)', fontSize: 12, marginTop: 2 }}>
+            Named AllowedIPs sets shown as route modes when adding a peer. Editing a template updates every peer that
+            uses it on its next config download (clients must re-import the config).
+          </div>
+        </span>
+        {rows.map((row, index) => (
+          <div
+            key={`${index}-${row.key}`}
+            style={{ marginTop: 10, padding: 10, border: '1px solid var(--la-panel-border)', borderRadius: 6 }}
+          >
+            <Space wrap style={{ marginBottom: 8 }}>
+              <Input
+                size="small"
+                className="mono"
+                style={{ width: 140 }}
+                placeholder="key (a-z0-9_-)"
+                value={row.key}
+                onChange={(e) => setRow(index, { key: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') })}
+              />
+              <Input
+                size="small"
+                style={{ width: 220 }}
+                placeholder="Label, e.g. Company networks"
+                value={row.label}
+                onChange={(e) => setRow(index, { label: e.target.value })}
+              />
+              <Button size="small" danger onClick={() => update(rows.filter((_, i) => i !== index))}>
+                Remove
+              </Button>
+            </Space>
+            <Input
+              size="small"
+              style={{ marginBottom: 8 }}
+              placeholder="Description (optional)"
+              value={row.description || ''}
+              onChange={(e) => setRow(index, { description: e.target.value })}
+            />
+            <Input.TextArea
+              rows={3}
+              className="mono"
+              placeholder="192.168.10.0/24, 10.20.0.0/16"
+              defaultValue={(row.allowed_ips || []).join(', ')}
+              onBlur={(e) =>
+                setRow(index, {
+                  allowed_ips: e.target.value
+                    .split(/[,\s]+/)
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
+          </div>
+        ))}
+        <Button
+          size="small"
+          style={{ marginTop: 10 }}
+          onClick={() => update([...rows, { key: '', label: '', description: '', allowed_ips: [] }])}
+        >
+          Add template
+        </Button>
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          padding: '8px 0',
+          borderBottom: '1px solid var(--la-panel-border)',
+        }}
+      >
+        <span style={{ fontSize: 13 }}>Default route mode for new peers</span>
+        <Select
+          size="small"
+          style={{ width: 240, flex: 'none' }}
+          value={mod.default_route_mode || 'vpn_only'}
+          options={routeOptions}
+          onChange={(value) => patch({ default_route_mode: value })}
+        />
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          padding: '8px 0',
+          borderBottom: '1px solid var(--la-panel-border)',
+        }}
+      >
+        <span style={{ fontSize: 13 }}>Default client DNS for new peers</span>
+        <Select
+          size="small"
+          style={{ width: 240, flex: 'none' }}
+          value={mod.default_dns_mode || 'none'}
+          options={[
+            { value: 'none', label: 'Keep OS / corporate DNS' },
+            { value: 'server', label: 'Use server DNS' },
+            { value: 'custom', label: 'Custom DNS' },
+          ]}
+          onChange={(value) => patch({ default_dns_mode: value })}
+        />
+      </div>
+    </>
+  )
+}
+
 function ModuleOptionsFields({
   moduleKey,
   mod,
@@ -691,6 +824,7 @@ function ModuleOptionsFields({
           <TextRow label="Interface" value={mod.interface ?? 'wg0'} mono onChange={(v) => patch({ interface: v })} />
           <TextRow label="Public endpoint host" value={mod.endpoint_host ?? ''} placeholder="auto FQDN / IP" onChange={(v) => patch({ endpoint_host: v })} />
           <NumberRow label="Listen port" value={mod.default_listen_port ?? 51820} min={1} max={65535} onChange={(v) => patch({ default_listen_port: v || 51820 })} />
+          <RouteTemplatesEditor mod={mod} patch={patch} />
         </>
       )
     case 'openvpn':

@@ -183,6 +183,9 @@ Provision locked-down SSH accounts for port-forwarding only.
 ## What it is
 Manage a WireGuard interface: server config, peers, full/split/custom routes, download `.conf` / QR.
 
+## Route templates
+In **Settings → Modules → WireGuard** add named AllowedIPs sets (for example "Company networks"). Each template appears as a route mode when adding a peer, and can be made the default together with the default client DNS. Peers keep a link to the template: after you edit it, the next `.conf` / QR download already has the new networks — clients only need to re-import the config.
+
 ## Permissions
 - **Read** — view server/peers/configs
 - **Full** — install tools, apply/stop, manage peers (`allow_mutations`)

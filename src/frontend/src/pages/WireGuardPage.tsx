@@ -104,6 +104,8 @@ type Overview = {
     online_handshake_seconds?: number
   }
   route_presets?: Record<string, { label: string; description: string }>
+  default_route_mode?: string
+  default_dns_mode?: 'none' | 'server' | 'custom' | string
   conf_path?: string
   conf_exists?: boolean
   ip_map?: IpMapData | null
@@ -256,9 +258,9 @@ export function WireGuardPage() {
     peerForm.setFieldsValue({
       name: '',
       address: prefillIp || '',
-      route_mode: 'vpn_only',
+      route_mode: data?.default_route_mode || 'vpn_only',
       allowed_ips_text: '',
-      dns_mode: 'none',
+      dns_mode: data?.default_dns_mode || 'none',
       dns: '',
       persistent_keepalive: 25,
       use_preshared_key: true,
