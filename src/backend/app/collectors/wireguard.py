@@ -1200,6 +1200,8 @@ async def create_peer(body: dict[str, Any], options: dict[str, Any] | None = Non
     if route_mode == "custom" and not allowed:
         return {"ok": False, "error": "Custom mode requires at least one AllowedIP"}
 
+    if not body.get("dns_mode") and not (body.get("dns") or "").strip():
+        body = {**body, "dns_mode": opts["default_dns_mode"]}
     dns_mode, dns_value = _normalize_peer_dns_fields(body, meta)
 
     peer_id = secrets.token_hex(8)
